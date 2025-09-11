@@ -96,24 +96,33 @@ jobs:
           set -euo pipefail
           W="${W:-}"
           mkdir -p "$W"
-          shopt -s nullglob || true
-          set -- "$W"/*.zip
-          if [ "$#" -eq 0 ]; then
+          # count zip files (works even if none)
+          ZIPCOUNT=0
+          for f in "$W"/*.zip; do
+            if [ -e "$f" ]; then ZIPCOUNT=$((ZIPCOUNT+1)); fi
+          done
+          if [ "$ZIPCOUNT" -eq 0 ]; then
             echo "No .zip found in $W — creating dummy package"
             mkdir -p "$W/.ci_dummy"
             echo "placeholder" > "$W/.ci_dummy/README.txt"
-            python - <<'PY'
+            if command -v zip >/dev/null 2>&1; then
+              (cd "$W" && zip -r ".dummy-package.zip" ".ci_dummy" > /dev/null || true)
+            else
+              # use python one-liner to create a zip (avoids heredoc complexity)
+              python3 - <<'PY'
 import zipfile, os
-w = os.environ.get("W") or "."
-zf = os.path.join(w, ".dummy-package.zip")
-with zipfile.ZipFile(zf, "w") as z:
-    p = os.path.join(w, ".ci_dummy", "README.txt")
+w = os.environ.get('W', '.')
+zf = os.path.join(w, '.dummy-package.zip')
+with zipfile.ZipFile(zf, 'w') as z:
+    p = os.path.join(w, '.ci_dummy', 'README.txt')
     if os.path.exists(p):
-        z.write(p, "README.txt")
+        z.write(p, 'README.txt')
 print(zf)
 PY
+            fi
+            echo "Dummy package created in $W"
           else
-            echo "Found $#: zip(s) in $W"
+            echo "Found $ZIPCOUNT .zip file(s) in $W"
           fi
 
       - name: Show script (head) if present
