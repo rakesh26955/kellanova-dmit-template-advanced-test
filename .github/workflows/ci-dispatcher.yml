@@ -1,10 +1,10 @@
-name: Run Both Shell Scripts Sequentially (callable & manual, workspace prep)
+name: Run Both Shell Scripts Sequentially (callable & manual)
 
 on:
   workflow_call:
     inputs:
       runner_label:
-        description: "Runner label to use (e.g. self-hosted-0009 or ubuntu-latest)"
+        description: "Runner label (string)"
         required: false
         type: string
         default: "ubuntu-latest"
@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       environment:
-        description: "Environment name (dev, stage, prod)"
+        description: "Environment"
         required: true
         type: string
       instance:
@@ -29,41 +29,50 @@ on:
         required: true
         type: string
       pool:
-        description: "Pool name (kstl, kfr)"
+        description: "Pool"
         required: true
         type: string
 
   workflow_dispatch:
     inputs:
       runner_label:
-        description: "Runner label to use (e.g. self-hosted-0009 or ubuntu-latest)"
+        description: "Runner label"
         required: false
         default: "ubuntu-latest"
+        type: choice
+        options:
+          - ubuntu-latest
+          - self-hosted-0009
       workspace:
-        description: "Workspace path"
-        required: true
-        default: "workspace"
+        description: "Workspace path (use runner workspace if empty)"
+        required: false
+        default: ""
       group:
         description: "Group name"
-        required: true
+        required: false
         default: "kellanova"
       project:
         description: "Project name"
-        required: true
+        required: false
         default: "demo-project"
       environment:
-        description: "Environment name (dev, stage, prod)"
-        required: true
+        description: "Environment"
+        required: false
         default: "dev"
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
       instance:
         description: "Instance type"
-        required: true
+        required: false
         default: "instance1"
       pool:
-        description: "Pool name (select from list)"
-        required: true
-        type: choice
+        description: "Pool (select)"
+        required: false
         default: "kstl"
+        type: choice
         options:
           - kstl
           - kfr
@@ -82,28 +91,64 @@ jobs:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # If private and called cross-repo, add:
-          # token: ${{ secrets.TEMPLATE_PAT }}
+          # if repo is private when called cross-repo, add token: ${{ secrets.TEMPLATE_PAT }}
 
-      - name: Print runner & inputs
+      - name: Resolve workspace
+        id: resolve
         run: |
-          echo "Runner name: $RUNNER_NAME"
-          echo "Runner OS: $(uname -a || true)"
-          echo "GitHub workspace: $GITHUB_WORKSPACE"
-          echo "Inputs:"
-          echo "  runner_label='${{ inputs.runner_label || github.event.inputs.runner_label }}'"
-          echo "  workspace='${{ inputs.workspace || github.event.inputs.workspace }}'"
-          echo "  group='${{ inputs.group || github.event.inputs.group }}'"
-          echo "  project='${{ inputs.project || github.event.inputs.project }}'"
-          echo "  environment='${{ inputs.environment || github.event.inputs.environment }}'"
-          echo "  instance='${{ inputs.instance || github.event.inputs.instance }}'"
-          echo "  pool='${{ inputs.pool || github.event.inputs.pool }}'"
+          set -euo pipefail
+          RAW="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
+          if [ -z "$RAW" ] || [ "$RAW" = "workspace" ] || [ "$RAW" = "." ]; then
+            echo "using_runner_workspace=true" >> $GITHUB_OUTPUT
+            echo "workspace=$GITHUB_WORKSPACE" >> $GITHUB_OUTPUT
+          else
+            echo "using_runner_workspace=false" >> $GITHUB_OUTPUT
+            echo "workspace=$RAW" >> $GITHUB_OUTPUT
+          fi
 
-      - name: List workspace & template (debug)
+      - name: Prepare workspace (create dummy zip if none)
         run: |
-          echo "PWD=$(pwd)"
-          echo "Caller root listing:"
-          ls -la . || true
-          echo "Template checkout listing (template/):"
-          ls -la template || true
-          echo "Template .github/scripts listing:"
+          set -euo pipefail
+          W="${{ steps.resolve.outputs.workspace }}"
+          if [ ! -d "$W" ]; then mkdir -p "$W"; fi
+          ZIP_COUNT=$(bash -lc "shopt -s nullglob; set -- \"$W\"/*.zip; echo \$#")
+          if [ "$ZIP_COUNT" -eq 0 ]; then
+            mkdir -p "$W/.ci_dummy_for_dispatcher"
+            echo "placeholder" > "$W/.ci_dummy_for_dispatcher/README.txt"
+            if command -v zip >/dev/null 2>&1; then
+              (cd "$W" && zip -r ".dummy-package.zip" ".ci_dummy_for_dispatcher" > /dev/null || true)
+            else
+              python - <<'PY'
+import zipfile, os, sys
+w = os.environ.get("W", sys.argv[1])
+zf = os.path.join(w, ".dummy-package.zip")
+with zipfile.ZipFile(zf, "w") as z:
+    z.write(os.path.join(w, ".ci_dummy_for_dispatcher", "README.txt"), "README.txt")
+print(zf)
+PY
+            fi
+            echo "Dummy zip created in $W"
+          else
+            echo "Found $ZIP_COUNT zip(s) in $W"
+          fi
+        env:
+          W: ${{ steps.resolve.outputs.workspace }}
+
+      - name: Show script (head) if present
+        run: |
+          SCRIPT="template/.github/scripts/deploy-content-packages.sh"
+          if [ -f "$SCRIPT" ]; then head -n 200 "$SCRIPT" || true; ls -l "$SCRIPT"; else echo "ERROR: $SCRIPT not found" && exit 2; fi
+
+      - name: Run deploy-content-packages.sh (traced)
+        run: |
+          set -euo pipefail
+          SCRIPT="template/.github/scripts/deploy-content-packages.sh"
+          chmod +x "$SCRIPT" || true
+          W="${{ steps.resolve.outputs.workspace }}"
+          G="${{ inputs.group || github.event.inputs.group }}"
+          P="${{ inputs.project || github.event.inputs.project }}"
+          E="${{ inputs.environment || github.event.inputs.environment }}"
+          I="${{ inputs.instance || github.event.inputs.instance }}"
+          PO="${{ inputs.pool || github.event.inputs.pool }}"
+          echo "Running: $SCRIPT $W $G $P $E $I $PO"
+          bash -x "$SCRIPT" "$W" "$G" "$P" "$E" "$I" "$PO"
