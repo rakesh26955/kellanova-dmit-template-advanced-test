@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially (callable & manual)
+name: Run Both Shell Scripts Sequentially (callable & manual, workspace prep)
 
 on:
   workflow_call:
@@ -62,7 +62,6 @@ on:
       pool:
         description: "Pool name (select from list)"
         required: true
-        # create dropdown in the Run workflow UI
         type: choice
         default: "kstl"
         options:
@@ -83,7 +82,7 @@ jobs:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # If this repo is private and the workflow is called from another repo, you may need a PAT:
+          # If private and called cross-repo, add:
           # token: ${{ secrets.TEMPLATE_PAT }}
 
       - name: Print runner & inputs
@@ -103,51 +102,8 @@ jobs:
       - name: List workspace & template (debug)
         run: |
           echo "PWD=$(pwd)"
-          echo "Caller repo root listing:"
+          echo "Caller root listing:"
           ls -la . || true
           echo "Template checkout listing (template/):"
           ls -la template || true
           echo "Template .github/scripts listing:"
-          ls -la template/.github || true
-          ls -la template/.github/scripts || true
-
-      - name: Show script (head) if present
-        run: |
-          SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
-          if [ -f "$SCRIPT_PATH" ]; then
-            echo "Found $SCRIPT_PATH - printing head (first 200 lines):"
-            head -n 200 "$SCRIPT_PATH" || true
-            ls -l "$SCRIPT_PATH"
-          else
-            echo "ERROR: $SCRIPT_PATH not found in template checkout"
-            exit 2
-          fi
-
-      - name: Run deploy-content-packages.sh (traced)
-        run: |
-          set -euo pipefail
-          SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
-
-          chmod +x "$SCRIPT_PATH" || true
-
-          # Grab values from workflow_call or workflow_dispatch
-          WSPACE_RAW="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
-          G="${{ inputs.group || github.event.inputs.group }}"
-          P="${{ inputs.project || github.event.inputs.project }}"
-          E="${{ inputs.environment || github.event.inputs.environment }}"
-          I="${{ inputs.instance || github.event.inputs.instance }}"
-          PO="${{ inputs.pool || github.event.inputs.pool }}"
-
-          # If WSPACE is placeholder/empty, fallback to GITHUB_WORKSPACE
-          if [ -z "${WSPACE_RAW}" ] || [ "${WSPACE_RAW}" = "workspace" ] || [ "${WSPACE_RAW}" = "." ]; then
-            WSPACE="$GITHUB_WORKSPACE"
-            echo "Workspace input was placeholder or empty — using GITHUB_WORKSPACE: $WSPACE"
-          else
-            WSPACE="${WSPACE_RAW}"
-            echo "Using provided workspace input: $WSPACE"
-          fi
-
-          echo "Executing $SCRIPT_PATH with arguments:"
-          echo "  $WSPACE $G $P $E $I $PO"
-
-          bash -x "$SCRIPT_PATH" "$WSPACE" "$G" "$P" "$E" "$I" "$PO"
