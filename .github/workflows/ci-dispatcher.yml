@@ -42,7 +42,7 @@ on:
       workspace:
         description: "Workspace path"
         required: true
-        default: "${{ github.workspace }}"
+        default: "workspace"
       group:
         description: "Group name"
         required: true
@@ -71,24 +71,22 @@ jobs:
     steps:
       - name: Checkout caller repository (default)
         uses: actions/checkout@v4
-        # This checks out the repo that triggered the workflow (caller or this repo when run manually).
 
-      - name: Checkout template repository (ensure scripts available)
+      - name: Checkout template repository (where the scripts live)
         uses: actions/checkout@v4
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # If this repo is private and the workflow is called from another repo you may need a PAT:
-          # token: ${{ secrets.TEMPLATE_PAT }} 
-          # (Set TEMPLATE_PAT in caller repo secrets with a PAT that has repo access.)
+          # If this repo is private and the workflow is called from another repo, you may need a PAT:
+          # token: ${{ secrets.TEMPLATE_PAT }}
 
       - name: Print runner & inputs
         run: |
           echo "Runner name: $RUNNER_NAME"
-          echo "Runner labels: $RUNNER_LABELS"
+          echo "Runner OS: $(uname -a || true)"
           echo "GitHub workspace: $GITHUB_WORKSPACE"
-          echo "Inputs (workflow_call or workflow_dispatch):"
+          echo "Inputs:"
           echo "  runner_label='${{ inputs.runner_label || github.event.inputs.runner_label }}'"
           echo "  workspace='${{ inputs.workspace || github.event.inputs.workspace }}'"
           echo "  group='${{ inputs.group || github.event.inputs.group }}'"
@@ -100,8 +98,6 @@ jobs:
       - name: List workspace & template (debug)
         run: |
           echo "PWD=$(pwd)"
-          echo "Root listing:"
-          ls -la || true
           echo "Caller repo root listing:"
           ls -la . || true
           echo "Template checkout listing (template/):"
@@ -110,37 +106,25 @@ jobs:
           ls -la template/.github || true
           ls -la template/.github/scripts || true
 
-      - name: Show script (head) if present (template)
+      - name: Show script (head) if present
         run: |
           SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
           if [ -f "$SCRIPT_PATH" ]; then
             echo "Found $SCRIPT_PATH - printing head (first 200 lines):"
             head -n 200 "$SCRIPT_PATH" || true
-            stat -c '%A %U %G %s %y' "$SCRIPT_PATH" || ls -l "$SCRIPT_PATH" || true
+            ls -l "$SCRIPT_PATH"
           else
             echo "ERROR: $SCRIPT_PATH not found in template checkout"
             exit 2
           fi
 
-      - name: Ensure script exists, make executable and run (traced)
+      - name: Run deploy-content-packages.sh (traced)
         run: |
           set -euo pipefail
           SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
 
-          if [ ! -f "$SCRIPT_PATH" ]; then
-            echo "ERROR: Expected script at $SCRIPT_PATH but it does not exist."
-            ls -la template || true
-            exit 2
-          fi
+          chmod +x "$SCRIPT_PATH" || true
 
-          # Try to fix Windows CRLF if present (no-op if dos2unix not installed)
-          if command -v dos2unix >/dev/null 2>&1; then
-            dos2unix "$SCRIPT_PATH" || true
-          fi
-
-          chmod +x "$SCRIPT_PATH"
-          echo "Running $SCRIPT_PATH with arguments:"
-          # pick value from workflow_call inputs or workflow_dispatch inputs
           WSPACE="${{ inputs.workspace || github.event.inputs.workspace }}"
           G="${{ inputs.group || github.event.inputs.group }}"
           P="${{ inputs.project || github.event.inputs.project }}"
@@ -148,11 +132,7 @@ jobs:
           I="${{ inputs.instance || github.event.inputs.instance }}"
           PO="${{ inputs.pool || github.event.inputs.pool }}"
 
-          echo "  workspace='${WSPACE}'"
-          echo "  group='${G}'"
-          echo "  project='${P}'"
-          echo "  environment='${E}'"
-          echo "  instance='${I}'"
-          echo "  pool='${PO}'"
+          echo "Executing $SCRIPT_PATH with arguments:"
+          echo "  $WSPACE $G $P $E $I $PO"
 
-          bash -x "$SCRIPT_PATH" "${WSPACE}" "${G}" "${P}" "${E}" "${I}" "${PO}"
+          bash -x "$SCRIPT_PATH" "$WSPACE" "$G" "$P" "$E" "$I" "$PO"
