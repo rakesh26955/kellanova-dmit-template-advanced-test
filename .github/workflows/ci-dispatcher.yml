@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner_label:
-        description: "Runner label (string)"
+        description: "Runner label"
         required: false
         type: string
         default: "ubuntu-latest"
@@ -13,11 +13,11 @@ on:
         required: true
         type: string
       group:
-        description: "Group name"
+        description: "Group"
         required: true
         type: string
       project:
-        description: "Project name"
+        description: "Project"
         required: true
         type: string
       environment:
@@ -25,7 +25,7 @@ on:
         required: true
         type: string
       instance:
-        description: "Instance type"
+        description: "Instance"
         required: true
         type: string
       pool:
@@ -36,13 +36,9 @@ on:
   workflow_dispatch:
     inputs:
       runner_label:
-        description: "Runner label"
+        description: "Runner label (ubuntu-latest or self-hosted)"
         required: false
         default: "ubuntu-latest"
-        type: choice
-        options:
-          - ubuntu-latest
-          - self-hosted-0009
       workspace:
         description: "Workspace path (leave empty to use runner workspace)"
         required: false
@@ -52,30 +48,21 @@ on:
         required: false
         default: "kellanova"
       project:
-        description: "Project name"
+        description: "Project"
         required: false
         default: "demo-project"
       environment:
         description: "Environment"
         required: false
         default: "dev"
-        type: choice
-        options:
-          - dev
-          - stage
-          - prod
       instance:
-        description: "Instance type"
+        description: "Instance"
         required: false
         default: "instance1"
       pool:
-        description: "Pool (select)"
+        description: "Pool (kstl or kfr)"
         required: false
         default: "kstl"
-        type: choice
-        options:
-          - kstl
-          - kfr
 
 jobs:
   run-scripts:
@@ -91,8 +78,7 @@ jobs:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # If template repo is private when called from another repo, add:
-          # token: ${{ secrets.TEMPLATE_PAT }}
+          # If this repo is private when called from another repo, set token: ${{ secrets.TEMPLATE_PAT }}
 
       - name: Resolve workspace
         id: resolve
@@ -115,20 +101,21 @@ jobs:
             exit 1
           fi
           mkdir -p "$W"
-          # count zips
-          shopt -s nullglob
+          shopt -s nullglob || true
           set -- "$W"/*.zip
           if [ "$#" -eq 0 ]; then
             echo "No zip found in $W — creating dummy package"
             mkdir -p "$W/.ci_dummy"
             echo "placeholder" > "$W/.ci_dummy/README.txt"
             # create zip via python (works on GH runners)
-            python - <<PY
-import zipfile, os
-w = os.environ['W']
+            python - <<'PY'
+import zipfile, os, sys
+w = os.environ.get('W') or sys.argv[1]
 zf = os.path.join(w, '.dummy-package.zip')
 with zipfile.ZipFile(zf, 'w') as z:
-    z.write(os.path.join(w, '.ci_dummy', 'README.txt'), 'README.txt')
+    p = os.path.join(w, '.ci_dummy', 'README.txt')
+    if os.path.exists(p):
+        z.write(p, 'README.txt')
 print(zf)
 PY
           else
