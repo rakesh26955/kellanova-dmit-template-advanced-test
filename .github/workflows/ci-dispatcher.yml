@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially
+name: Run Both Shell Scripts Sequentially (fixed)
 
 on:
   workflow_call:
@@ -35,25 +35,82 @@ on:
 
 jobs:
   run-scripts:
-    # use the passed runner_label (falls back to "ubuntu-latest" by default)
+    # uses the runner label passed from the caller (default ubuntu-latest)
     runs-on: ${{ inputs.runner_label }}
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Make scripts executable
+      - name: Print runner & environment info
         run: |
-          chmod +x ./scripts/deploy-content-packages.sh
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $(uname -a || true)"
+          echo "GitHub workspace: $GITHUB_WORKSPACE"
+          echo "Input values:"
+          echo "  workspace='${{ inputs.workspace }}'"
+          echo "  group='${{ inputs.group }}'"
+          echo "  project='${{ inputs.project }}'"
+          echo "  environment='${{ inputs.environment }}'"
+          echo "  instance='${{ inputs.instance }}'"
+          echo "  pool='${{ inputs.pool }}'"
 
-      - name: Run deploy-content-packages
+      - name: List repo structure (debug)
         run: |
-          ./scripts/deploy-content-packages.sh \
+          echo "PWD=$(pwd)"
+          echo "Repo root files:"
+          ls -la || true
+          echo ".github contents:"
+          ls -la .github || true
+          echo ".github/scripts contents:"
+          ls -la .github/scripts || true
+          echo "scripts (if exists):"
+          ls -la scripts || true
+
+      - name: Show script (head) if present
+        run: |
+          SCRIPT_PATH=".github/scripts/deploy-content-packages.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            echo "Found $SCRIPT_PATH - printing head (first 200 lines):"
+            head -n 200 "$SCRIPT_PATH" || true
+            stat -c '%A %U %G %s %y' "$SCRIPT_PATH" || ls -l "$SCRIPT_PATH" || true
+          else
+            echo "NOTE: $SCRIPT_PATH not found."
+          fi
+
+      - name: Ensure script exists, make executable and run (traced)
+        run: |
+          set -euo pipefail
+          SCRIPT_PATH=".github/scripts/deploy-content-packages.sh"
+
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "ERROR: Expected script at $SCRIPT_PATH but it does not exist."
+            echo "Listing likely locations for debugging:"
+            ls -la .github || true
+            ls -la .github/scripts || true
+            ls -la scripts || true
+            exit 2
+          fi
+
+          # Fix line endings (safe no-op if not needed)
+          if command -v dos2unix >/dev/null 2>&1; then
+            dos2unix "$SCRIPT_PATH" || true
+          fi
+
+          chmod +x "$SCRIPT_PATH"
+          echo "Running $SCRIPT_PATH with arguments:"
+          echo "  workspace='${{ inputs.workspace }}'"
+          echo "  group='${{ inputs.group }}'"
+          echo "  project='${{ inputs.project }}'"
+          echo "  environment='${{ inputs.environment }}'"
+          echo "  instance='${{ inputs.instance }}'"
+          echo "  pool='${{ inputs.pool }}'"
+
+          # run with bash tracing so failing command is visible in logs
+          bash -x "$SCRIPT_PATH" \
             "${{ inputs.workspace }}" \
             "${{ inputs.group }}" \
             "${{ inputs.project }}" \
             "${{ inputs.environment }}" \
             "${{ inputs.instance }}" \
             "${{ inputs.pool }}"
-
-      - name: Wait for 15 seconds
-        run: sleep 15
