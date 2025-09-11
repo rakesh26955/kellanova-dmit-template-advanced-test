@@ -60,9 +60,14 @@ on:
         required: true
         default: "instance1"
       pool:
-        description: "Pool name (kstl, kfr)"
+        description: "Pool name (select from list)"
         required: true
+        # create dropdown in the Run workflow UI
+        type: choice
         default: "kstl"
+        options:
+          - kstl
+          - kfr
 
 jobs:
   run-scripts:
@@ -125,12 +130,22 @@ jobs:
 
           chmod +x "$SCRIPT_PATH" || true
 
-          WSPACE="${{ inputs.workspace || github.event.inputs.workspace }}"
+          # Grab values from workflow_call or workflow_dispatch
+          WSPACE_RAW="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
           G="${{ inputs.group || github.event.inputs.group }}"
           P="${{ inputs.project || github.event.inputs.project }}"
           E="${{ inputs.environment || github.event.inputs.environment }}"
           I="${{ inputs.instance || github.event.inputs.instance }}"
           PO="${{ inputs.pool || github.event.inputs.pool }}"
+
+          # If WSPACE is placeholder/empty, fallback to GITHUB_WORKSPACE
+          if [ -z "${WSPACE_RAW}" ] || [ "${WSPACE_RAW}" = "workspace" ] || [ "${WSPACE_RAW}" = "." ]; then
+            WSPACE="$GITHUB_WORKSPACE"
+            echo "Workspace input was placeholder or empty — using GITHUB_WORKSPACE: $WSPACE"
+          else
+            WSPACE="${WSPACE_RAW}"
+            echo "Using provided workspace input: $WSPACE"
+          fi
 
           echo "Executing $SCRIPT_PATH with arguments:"
           echo "  $WSPACE $G $P $E $I $PO"
