@@ -1,0 +1,52 @@
+name: Run Both Shell Scripts Sequentially
+
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: "Workspace path"
+        required: true
+        type: string
+      group:
+        description: "Group name"
+        required: true
+        type: string
+      project:
+        description: "Project name"
+        required: true
+        type: string
+      environment:
+        description: "Environment name (dev, stage, prod)"
+        required: true
+        type: string
+      instance:
+        description: "Instance type"
+        required: true
+        type: string
+      pool:
+        description: "Pool name (kstl, kfr)"
+        required: true
+        type: string
+jobs:
+  run-scripts:
+    runs-on: self-hosted-0009
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: |
+          chmod +x ./scripts/deploy-content-packages.sh
+
+      - name: Run deploy-content-packages
+        run: |
+          ./scripts/deploy-content-packages.sh \
+            "${{ inputs.workspace }}" \
+            "${{ inputs.group }}" \
+            "${{ inputs.project }}" \
+            "${{ inputs.environment }}" \
+            "${{ inputs.instance }}" \
+            "${{ inputs.pool }}"
+
+      - name: Wait for 15 seconds
+        run: sleep 15
