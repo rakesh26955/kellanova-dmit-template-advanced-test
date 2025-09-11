@@ -102,25 +102,12 @@ jobs:
             if [ -e "$f" ]; then ZIPCOUNT=$((ZIPCOUNT+1)); fi
           done
           if [ "$ZIPCOUNT" -eq 0 ]; then
-            echo "No .zip found in $W — creating dummy package"
+            echo "No .zip found in $W — creating a small dummy .zip header file"
             mkdir -p "$W/.ci_dummy"
             echo "placeholder" > "$W/.ci_dummy/README.txt"
-            if command -v zip >/dev/null 2>&1; then
-              (cd "$W" && zip -r ".dummy-package.zip" ".ci_dummy" > /dev/null || true)
-            else
-              # use python one-liner to create a zip (avoids heredoc complexity)
-              python3 - <<'PY'
-import zipfile, os
-w = os.environ.get('W', '.')
-zf = os.path.join(w, '.dummy-package.zip')
-with zipfile.ZipFile(zf, 'w') as z:
-    p = os.path.join(w, '.ci_dummy', 'README.txt')
-    if os.path.exists(p):
-        z.write(p, 'README.txt')
-print(zf)
-PY
-            fi
-            echo "Dummy package created in $W"
+            # create a tiny file that starts with ZIP magic bytes (PK..)
+            printf '\x50\x4B\x03\x04' > "$W/.dummy-package.zip"
+            echo "Created dummy file $W/.dummy-package.zip"
           else
             echo "Found $ZIPCOUNT .zip file(s) in $W"
           fi
