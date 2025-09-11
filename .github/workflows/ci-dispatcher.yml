@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner_label:
-        description: "Runner label"
+        description: "Runner label (string)"
         required: false
         type: string
         default: "ubuntu-latest"
@@ -14,6 +14,10 @@ on:
         type: string
       group:
         description: "Group name"
+        required: true
+        type: string
+      agency:
+        description: "Agency"
         required: true
         type: string
       project:
@@ -38,7 +42,11 @@ on:
       runner_label:
         description: "Runner label"
         required: false
+        type: choice
         default: "ubuntu-latest"
+        options:
+          - ubuntu-latest
+          - self-hosted-0009
       workspace:
         description: "Workspace path (leave empty to use runner workspace)"
         required: false
@@ -47,14 +55,28 @@ on:
         description: "Group name"
         required: false
         default: "kellanova"
+      agency:
+        description: "Agency (choose)"
+        required: false
+        type: choice
+        default: "agency-a"
+        options:
+          - agency-a
+          - agency-b
+          - agency-c
       project:
         description: "Project name"
         required: false
         default: "demo-project"
       environment:
-        description: "Environment"
+        description: "Environment (choose)"
         required: false
+        type: choice
         default: "dev"
+        options:
+          - dev
+          - stage
+          - prod
       instance:
         description: "Instance type"
         required: false
@@ -62,7 +84,11 @@ on:
       pool:
         description: "Pool"
         required: false
+        type: choice
         default: "kstl"
+        options:
+          - kstl
+          - kfr
 
 jobs:
   run-scripts:
@@ -79,43 +105,51 @@ jobs:
           ref: main
           path: template
 
-      - name: Resolve workspace
+      - name: Resolve effective inputs
         id: resolve
         run: |
-          RAW="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
-          if [ -z "$RAW" ] || [ "$RAW" = "workspace" ] || [ "$RAW" = "." ]; then
-            echo "workspace=$GITHUB_WORKSPACE" >> $GITHUB_OUTPUT
-          else
-            echo "workspace=$RAW" >> $GITHUB_OUTPUT
+          # prefer workflow_call inputs when present; otherwise use workflow_dispatch inputs
+          # WORKSPACE is required for workflow_call; for manual runs this may be empty and we'll fallback to GITHUB_WORKSPACE
+          WORKSPACE="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
+          GROUP="${{ inputs.group || github.event.inputs.group || '' }}"
+          AGENCY="${{ inputs.agency || github.event.inputs.agency || '' }}"
+          PROJECT="${{ inputs.project || github.event.inputs.project || '' }}"
+          ENV="${{ inputs.environment || github.event.inputs.environment || '' }}"
+          INSTANCE="${{ inputs.instance || github.event.inputs.instance || '' }}"
+          POOL="${{ inputs.pool || github.event.inputs.pool || '' }}"
+          RUNNER_LABEL="${{ inputs.runner_label || github.event.inputs.runner_label || '' }}"
+
+          if [ -z "$WORKSPACE" ] || [ "$WORKSPACE" = "workspace" ] || [ "$WORKSPACE" = "." ]; then
+            WORKSPACE="$GITHUB_WORKSPACE"
           fi
 
-      - name: Prepare workspace (ensure at least one .zip)
-        env:
-          W: ${{ steps.resolve.outputs.workspace }}
+          echo "workspace=$WORKSPACE" >> $GITHUB_OUTPUT
+          echo "group=$GROUP" >> $GITHUB_OUTPUT
+          echo "agency=$AGENCY" >> $GITHUB_OUTPUT
+          echo "project=$PROJECT" >> $GITHUB_OUTPUT
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "instance=$INSTANCE" >> $GITHUB_OUTPUT
+          echo "pool=$POOL" >> $GITHUB_OUTPUT
+          echo "runner_label=$RUNNER_LABEL" >> $GITHUB_OUTPUT
+
+      - name: Check for packages (.zip) and set flag
+        id: zipcheck
         run: |
-          set -euo pipefail
-          W="${W:-}"
+          W="${{ steps.resolve.outputs.workspace }}"
           mkdir -p "$W"
-          # count zip files (works even if none)
-          ZIPCOUNT=0
+          COUNT=0
           for f in "$W"/*.zip; do
-            if [ -e "$f" ]; then ZIPCOUNT=$((ZIPCOUNT+1)); fi
+            if [ -e "$f" ]; then COUNT=$((COUNT+1)); fi
           done
-          if [ "$ZIPCOUNT" -eq 0 ]; then
-            echo "No .zip found in $W — creating a small dummy .zip header file"
-            mkdir -p "$W/.ci_dummy"
-            echo "placeholder" > "$W/.ci_dummy/README.txt"
-            # create a tiny file that starts with ZIP magic bytes (PK..)
-            printf '\x50\x4B\x03\x04' > "$W/.dummy-package.zip"
-            echo "Created dummy file $W/.dummy-package.zip"
-          else
-            echo "Found $ZIPCOUNT .zip file(s) in $W"
-          fi
+          echo "found=$COUNT" >> $GITHUB_OUTPUT
+          echo "Found $COUNT .zip(s) in $W"
 
       - name: Show script (head) if present
+        if: steps.zipcheck.outputs.found != '0'
         run: |
           SCRIPT="template/.github/scripts/deploy-content-packages.sh"
           if [ -f "$SCRIPT" ]; then
+            echo "=== script head ==="
             head -n 200 "$SCRIPT" || true
             ls -l "$SCRIPT"
           else
@@ -124,15 +158,24 @@ jobs:
           fi
 
       - name: Run deploy-content-packages.sh (traced)
+        if: steps.zipcheck.outputs.found != '0'
         run: |
           set -euo pipefail
           SCRIPT="template/.github/scripts/deploy-content-packages.sh"
           chmod +x "$SCRIPT" || true
+
           W="${{ steps.resolve.outputs.workspace }}"
-          G="${{ inputs.group || github.event.inputs.group }}"
-          P="${{ inputs.project || github.event.inputs.project }}"
-          E="${{ inputs.environment || github.event.inputs.environment }}"
-          I="${{ inputs.instance || github.event.inputs.instance }}"
-          PO="${{ inputs.pool || github.event.inputs.pool }}"
-          echo "Running: $SCRIPT $W $G $P $E $I $PO"
-          bash -x "$SCRIPT" "$W" "$G" "$P" "$E" "$I" "$PO"
+          G="${{ steps.resolve.outputs.group }}"
+          A="${{ steps.resolve.outputs.agency }}"
+          P="${{ steps.resolve.outputs.project }}"
+          E="${{ steps.resolve.outputs.environment }}"
+          I="${{ steps.resolve.outputs.instance }}"
+          PO="${{ steps.resolve.outputs.pool }}"
+
+          echo "Running: $SCRIPT $W $G $A $P $E $I $PO"
+          bash -x "$SCRIPT" "$W" "$G" "$A" "$P" "$E" "$I" "$PO"
+
+      - name: No packages found (skipped deploy)
+        if: steps.zipcheck.outputs.found == '0'
+        run: |
+          echo "No .zip files found in workspace. Skipping deploy step. (No files created.)"
