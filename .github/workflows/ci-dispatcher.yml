@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially (callable & manual)
+name: CI Dispatcher
 
 on:
   workflow_call:
@@ -66,19 +66,18 @@ on:
 
 jobs:
   run-scripts:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || github.event.inputs.runner_label || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout caller repository (default)
         uses: actions/checkout@v4
 
-      - name: Checkout template repository (where the scripts live)
+      - name: Checkout template repository (self)
         uses: actions/checkout@v4
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # If template repo is private when called cross-repo, set token: ${{ secrets.TEMPLATE_PAT }}
 
       - name: Resolve workspace
         id: resolve
@@ -90,31 +89,27 @@ jobs:
             echo "workspace=$RAW" >> $GITHUB_OUTPUT
           fi
 
-      - name: Prepare workspace (create dummy zip if none)
+      - name: Prepare workspace (ensure at least one .zip)
         env:
           W: ${{ steps.resolve.outputs.workspace }}
         run: |
           set -euo pipefail
           W="${W:-}"
-          if [ -z "$W" ]; then
-            echo "Workspace unresolved, exiting"
-            exit 1
-          fi
           mkdir -p "$W"
           shopt -s nullglob || true
           set -- "$W"/*.zip
           if [ "$#" -eq 0 ]; then
-            echo "No zip found in $W — creating dummy package"
+            echo "No .zip found in $W — creating dummy package"
             mkdir -p "$W/.ci_dummy"
             echo "placeholder" > "$W/.ci_dummy/README.txt"
             python - <<'PY'
-import zipfile, os, sys
-w = os.environ.get('W') or sys.argv[1]
-zf = os.path.join(w, '.dummy-package.zip')
-with zipfile.ZipFile(zf, 'w') as z:
-    p = os.path.join(w, '.ci_dummy', 'README.txt')
+import zipfile, os
+w = os.environ.get("W") or "."
+zf = os.path.join(w, ".dummy-package.zip")
+with zipfile.ZipFile(zf, "w") as z:
+    p = os.path.join(w, ".ci_dummy", "README.txt")
     if os.path.exists(p):
-        z.write(p, 'README.txt')
+        z.write(p, "README.txt")
 print(zf)
 PY
           else
