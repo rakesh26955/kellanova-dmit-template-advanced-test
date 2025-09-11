@@ -44,7 +44,7 @@ on:
           - ubuntu-latest
           - self-hosted-0009
       workspace:
-        description: "Workspace path (use runner workspace if empty)"
+        description: "Workspace path (leave empty to use runner workspace)"
         required: false
         default: ""
       group:
@@ -91,53 +91,60 @@ jobs:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
           path: template
-          # if repo is private when called cross-repo, add token: ${{ secrets.TEMPLATE_PAT }}
+          # If template repo is private when called from another repo, add:
+          # token: ${{ secrets.TEMPLATE_PAT }}
 
       - name: Resolve workspace
         id: resolve
         run: |
-          set -euo pipefail
           RAW="${{ inputs.workspace || github.event.inputs.workspace || '' }}"
           if [ -z "$RAW" ] || [ "$RAW" = "workspace" ] || [ "$RAW" = "." ]; then
-            echo "using_runner_workspace=true" >> $GITHUB_OUTPUT
             echo "workspace=$GITHUB_WORKSPACE" >> $GITHUB_OUTPUT
           else
-            echo "using_runner_workspace=false" >> $GITHUB_OUTPUT
             echo "workspace=$RAW" >> $GITHUB_OUTPUT
           fi
 
       - name: Prepare workspace (create dummy zip if none)
-        run: |
-          set -euo pipefail
-          W="${{ steps.resolve.outputs.workspace }}"
-          if [ ! -d "$W" ]; then mkdir -p "$W"; fi
-          ZIP_COUNT=$(bash -lc "shopt -s nullglob; set -- \"$W\"/*.zip; echo \$#")
-          if [ "$ZIP_COUNT" -eq 0 ]; then
-            mkdir -p "$W/.ci_dummy_for_dispatcher"
-            echo "placeholder" > "$W/.ci_dummy_for_dispatcher/README.txt"
-            if command -v zip >/dev/null 2>&1; then
-              (cd "$W" && zip -r ".dummy-package.zip" ".ci_dummy_for_dispatcher" > /dev/null || true)
-            else
-              python - <<'PY'
-import zipfile, os, sys
-w = os.environ.get("W", sys.argv[1])
-zf = os.path.join(w, ".dummy-package.zip")
-with zipfile.ZipFile(zf, "w") as z:
-    z.write(os.path.join(w, ".ci_dummy_for_dispatcher", "README.txt"), "README.txt")
-print(zf)
-PY
-            fi
-            echo "Dummy zip created in $W"
-          else
-            echo "Found $ZIP_COUNT zip(s) in $W"
-          fi
         env:
           W: ${{ steps.resolve.outputs.workspace }}
+        run: |
+          set -euo pipefail
+          W="${W:-}"
+          if [ -z "$W" ]; then
+            echo "Workspace unresolved, exiting"
+            exit 1
+          fi
+          mkdir -p "$W"
+          # count zips
+          shopt -s nullglob
+          set -- "$W"/*.zip
+          if [ "$#" -eq 0 ]; then
+            echo "No zip found in $W — creating dummy package"
+            mkdir -p "$W/.ci_dummy"
+            echo "placeholder" > "$W/.ci_dummy/README.txt"
+            # create zip via python (works on GH runners)
+            python - <<PY
+import zipfile, os
+w = os.environ['W']
+zf = os.path.join(w, '.dummy-package.zip')
+with zipfile.ZipFile(zf, 'w') as z:
+    z.write(os.path.join(w, '.ci_dummy', 'README.txt'), 'README.txt')
+print(zf)
+PY
+          else
+            echo "Found $#: zip(s) in $W"
+          fi
 
       - name: Show script (head) if present
         run: |
           SCRIPT="template/.github/scripts/deploy-content-packages.sh"
-          if [ -f "$SCRIPT" ]; then head -n 200 "$SCRIPT" || true; ls -l "$SCRIPT"; else echo "ERROR: $SCRIPT not found" && exit 2; fi
+          if [ -f "$SCRIPT" ]; then
+            head -n 200 "$SCRIPT" || true
+            ls -l "$SCRIPT"
+          else
+            echo "ERROR: $SCRIPT not found"
+            exit 2
+          fi
 
       - name: Run deploy-content-packages.sh (traced)
         run: |
