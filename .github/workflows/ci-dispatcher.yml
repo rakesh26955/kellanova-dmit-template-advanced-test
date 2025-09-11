@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially (fixed)
+name: Run Both Shell Scripts Sequentially (fixed-checkout)
 
 on:
   workflow_call:
@@ -35,64 +35,62 @@ on:
 
 jobs:
   run-scripts:
-    # uses the runner label passed from the caller (default ubuntu-latest)
     runs-on: ${{ inputs.runner_label }}
 
     steps:
-      - name: Checkout repository
+      # 1) Checkout the caller repository (this is the default behavior)
+      - name: Checkout caller repository (default)
         uses: actions/checkout@v4
+        # Note: this checks out the repository that triggered the workflow (the caller)
 
-      - name: Print runner & environment info
-        run: |
-          echo "Runner name: $RUNNER_NAME"
-          echo "Runner OS: $(uname -a || true)"
-          echo "GitHub workspace: $GITHUB_WORKSPACE"
-          echo "Input values:"
-          echo "  workspace='${{ inputs.workspace }}'"
-          echo "  group='${{ inputs.group }}'"
-          echo "  project='${{ inputs.project }}'"
-          echo "  environment='${{ inputs.environment }}'"
-          echo "  instance='${{ inputs.instance }}'"
-          echo "  pool='${{ inputs.pool }}'"
+      # 2) Checkout the template repository explicitly into `template/`
+      - name: Checkout template repository (where the scripts live)
+        uses: actions/checkout@v4
+        with:
+          repository: rakesh26955/kellanova-dmit-template-advanced-test
+          ref: main
+          path: template
+          # If the template repo is private and not accessible with GITHUB_TOKEN,
+          # add a token: ${{ secrets.PERSONAL_ACCESS_TOKEN }} here and set that secret
+          # in the caller repository to enable reading the private template repo.
 
-      - name: List repo structure (debug)
+      - name: Show repo layout for debugging
         run: |
           echo "PWD=$(pwd)"
-          echo "Repo root files:"
+          echo "Root listing:"
           ls -la || true
-          echo ".github contents:"
-          ls -la .github || true
-          echo ".github/scripts contents:"
-          ls -la .github/scripts || true
-          echo "scripts (if exists):"
-          ls -la scripts || true
+          echo "Caller repo listing (root):"
+          ls -la . || true
+          echo "Template checkout listing (template/):"
+          ls -la template || true
+          echo "Template .github/scripts listing:"
+          ls -la template/.github || true
+          ls -la template/.github/scripts || true
 
-      - name: Show script (head) if present
+      - name: Show script (head) if present (template)
         run: |
-          SCRIPT_PATH=".github/scripts/deploy-content-packages.sh"
+          SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
           if [ -f "$SCRIPT_PATH" ]; then
             echo "Found $SCRIPT_PATH - printing head (first 200 lines):"
             head -n 200 "$SCRIPT_PATH" || true
             stat -c '%A %U %G %s %y' "$SCRIPT_PATH" || ls -l "$SCRIPT_PATH" || true
           else
-            echo "NOTE: $SCRIPT_PATH not found."
-          fi
-
-      - name: Ensure script exists, make executable and run (traced)
-        run: |
-          set -euo pipefail
-          SCRIPT_PATH=".github/scripts/deploy-content-packages.sh"
-
-          if [ ! -f "$SCRIPT_PATH" ]; then
-            echo "ERROR: Expected script at $SCRIPT_PATH but it does not exist."
-            echo "Listing likely locations for debugging:"
-            ls -la .github || true
-            ls -la .github/scripts || true
-            ls -la scripts || true
+            echo "ERROR: $SCRIPT_PATH not found in template checkout"
             exit 2
           fi
 
-          # Fix line endings (safe no-op if not needed)
+      - name: Ensure script exists, make executable and run (traced) from template
+        run: |
+          set -euo pipefail
+          SCRIPT_PATH="template/.github/scripts/deploy-content-packages.sh"
+
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "ERROR: Expected script at $SCRIPT_PATH but it does not exist."
+            ls -la template || true
+            exit 2
+          fi
+
+          # optional: convert CRLF -> LF if needed (no-op if dos2unix unavailable)
           if command -v dos2unix >/dev/null 2>&1; then
             dos2unix "$SCRIPT_PATH" || true
           fi
@@ -106,7 +104,6 @@ jobs:
           echo "  instance='${{ inputs.instance }}'"
           echo "  pool='${{ inputs.pool }}'"
 
-          # run with bash tracing so failing command is visible in logs
           bash -x "$SCRIPT_PATH" \
             "${{ inputs.workspace }}" \
             "${{ inputs.group }}" \
