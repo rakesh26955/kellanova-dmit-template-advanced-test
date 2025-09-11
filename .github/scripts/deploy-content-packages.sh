@@ -1,45 +1,73 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# This script should deploy or build and deploy a given package
+# $1 = $WORKSPACE
+# $2 = Group:agency|partner
+# $3 = ProjectName:output
+# $4 = Environment:dev|stage|production
+# $5 = Instance:author|publish|both
+# $6 = Pool:kstl|kfr
 
-# ---- Argument parsing (your original code likely already does this) ----
-workspace=$1
-group=$2
-project=$3
-environment=$4
-instance=$5
-pool=$6
+help() {
+        echo "invalid number of arguments or help requested"
+        echo "parameters: workspace group-name project-name environment instance pool"
+}
 
-echo "Arguments received:"
-echo "  workspace=$workspace"
-echo "  group=$group"
-echo "  project=$project"
-echo "  environment=$environment"
-echo "  instance=$instance"
-echo "  pool=$pool"
+case $1 in
+        --help | -h | -help | -hlep)
+        help
+        ;;
+*)
+esac
 
-# ---- Navigate to workspace ----
-if [ ! -d "$workspace" ]; then
-  echo "❌ Workspace directory $workspace does not exist!"
-  exit 1
+#Setup variables
+if [ -z "$workspace" ]; then
+        workspace=$1
 fi
 
-cd "$workspace"
-
-# ---- Look for .zip packages ----
-echo "Looking for .zip packages in $(pwd)..."
-X=$(ls *.zip 2>/dev/null | wc -l)
-
-if [ "$X" -eq 0 ]; then
-  echo "⚠️ No packages found in path $(pwd). Skipping deployment."
-  exit 0   # Exit successfully instead of failing
+if [ -z "$group" ]; then
+        group=$2
 fi
 
-echo "✅ Found $X package(s):"
-ls -1 *.zip
+if [ -z "$project" ]; then
+        project=$3
+fi
 
-# ---- Continue with your deployment logic below ----
-# For example:
-# for pkg in *.zip; do
-#   echo "Deploying $pkg ..."
-#   # deployment command here
-# done
+if [ -z "$environment" ]; then
+        environment=$4
+fi
+
+if [ -z "$instance" ]; then
+        instance=$5
+fi
+
+if [ -z "$pool" ]; then
+        pool=$6
+fi
+
+function getpackages {
+#Create Package Array
+cd $workspace
+X=0
+for i in `ls *.zip` ; do
+        package[$X]="$i"
+        let "X= $X + 1 "
+done
+
+if [ $X -eq 0 ]; then
+        echo "no packages found in path `pwd`!"
+        exit 1
+else
+        #Run package installer
+        for n in ${package[@]}; do
+                echo "Sending $packagename to deploy script."
+                packagename=`echo ${n} | awk -F'.zip' '{print $1}'`
+                # /var/lib/build/scripts/deploy/deploy-package-filter.sh $workspace $packagename $group $project $environment $instance $pool
+        done
+fi
+}
+
+if [ `echo $@ | wc -w` -eq 6 ]; then
+        getpackages
+else
+        help
+fi
