@@ -1,14 +1,16 @@
-# #!/bin/sh
-# # This script should deploy or build and deploy a given package
-# # $1 = PackagePath:$WORKSPACE/ui/target/
-# # $2 = PackageName:output-ui-1-0
-# # $3 = Group:agency|partner
-# # $4 = ProjectName:output
-# # $5 = Environment:dev|stage|production
-# # $6 = Instance:author|publish|both
-# # $7 = Pool:kstl|kfr
-# # $8 = DebugFlag:debug
+#!/bin/sh
+# This script should deploy or build and deploy a given package
+# $1 = PackagePath:$WORKSPACE/ui/target/
+# $2 = PackageName:output-ui-1-0
+# $3 = Group:agency|partner
+# $4 = ProjectName:output
+# $5 = Environment:dev|stage|production
+# $6 = Instance:author|publish|both
+# $7 = Pool:kstl|kfr
+# $8 = DebugFlag:debug
 
+
+echo "able to connect and trigger the .sh script"
 # help() {
         # echo "invalid number of arguments or help requested"
         # echo "parameters: target-jar-location package-name group-name project-name environment instance pool"
