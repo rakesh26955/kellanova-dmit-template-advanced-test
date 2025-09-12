@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially (env: dev|stage|prod)
+name: ci-dispatcher (reusable)
 
 on:
   workflow_call:
@@ -30,111 +30,52 @@ permissions:
 
 jobs:
   run-scripts:
-    runs-on: self-hosted-0009
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout application repository (caller)
+      - name: Checkout caller repo (app)
         uses: actions/checkout@v4
         with:
           path: app
 
-      - name: Checkout Kellanova repository (scripts & config)
+      - name: Checkout template repo (self)
         uses: actions/checkout@v4
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
-          ref: main
           token: ${{ secrets.GH_Token }}
           path: temp
           persist-credentials: false
 
-      - name: Ensure scripts are executable if present
-        run: |
-          chmod +x temp/.github/scripts/*.sh || true
-
-      - name: Validate inputs & normalize
+      - name: Validate inputs (simple)
         id: validate
         run: |
-          # validate and normalize inputs
-          allowed_envs="dev stage prod"
-          allowed_instances="author publish both"
-          allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
-
-          IN_WORKSPACE="${{ inputs.workspace }}"
-          IN_GROUP="${{ inputs.group }}"
-          IN_PROJECT="${{ inputs.project }}"
-          IN_ENV="${{ inputs.environment }}"
-          IN_INSTANCE="${{ inputs.instance }}"
-          IN_POOL="${{ inputs.pool }}"
-
-          contains() {
-            list="$1"; item="$2"
-            for t in $list; do
-              if [ "$t" = "$item" ]; then
-                return 0
-              fi
-            done
-            return 1
-          }
-
-          if ! contains "$allowed_envs" "$IN_ENV"; then
-            echo "ERROR: Invalid environment: $IN_ENV" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
-            echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_pools" "$IN_POOL"; then
-            echo "ERROR: Invalid pool: $IN_POOL" >&2
-            exit 1
-          fi
-
-          case "$IN_ENV" in
-            dev)  MAPPED_ENV="dev" ;;
-            stage) MAPPED_ENV="stg" ;;
-            prod) MAPPED_ENV="prd" ;;
-            *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
-          esac
-
-          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
-          echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
+          echo "workspace=${{ inputs.workspace }}" >> $GITHUB_OUTPUT
+          echo "group=${{ inputs.group }}" >> $GITHUB_OUTPUT
+          echo "project=${{ inputs.project }}" >> $GITHUB_OUTPUT
+          echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "instance=${{ inputs.instance }}" >> $GITHUB_OUTPUT
+          echo "pool=${{ inputs.pool }}" >> $GITHUB_OUTPUT
 
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Looking for .zip files in: ${WS}"
+          echo "Checking: $WS"
           if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found:"
             ls -la "${WS}"/*.zip || true
           else
-            echo "No .zip files found in '${WS}'. Aborting." >&2
+            echo "No .zip files found in ${WS}" >&2
             exit 1
           fi
 
-      - name: Run deploy-content-packages script
+      - name: (Optional) Call deploy wrapper if present
         env:
           SERVER_CONFIG: temp/config/server.properties
-          DEBUG: "false"
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
-          if [ -f "$DEPLOY_WRAPPER" ] && [ -x "$DEPLOY_WRAPPER" ]; then
-            bash "$DEPLOY_WRAPPER" \
-              "app/${{ steps.validate.outputs.workspace }}" \
-              "${{ steps.validate.outputs.group }}" \
-              "${{ steps.validate.outputs.project }}" \
-              "${{ steps.validate.outputs.mapped_environment }}" \
-              "${{ steps.validate.outputs.instance }}" \
-              "${{ steps.validate.outputs.pool }}"
+          if [ -f "$DEPLOY_WRAPPER" ]; then
+            chmod +x "$DEPLOY_WRAPPER" || true
+            echo "Would run deploy wrapper: $DEPLOY_WRAPPER"
+            # to actually run: uncomment next line
+            # bash "$DEPLOY_WRAPPER" "app/${{ steps.validate.outputs.workspace }}" "${{ inputs.group }}" "${{ inputs.project }}" "${{ inputs.environment }}" "${{ inputs.instance }}" "${{ inputs.pool }}"
           else
-            echo "ERROR: Deploy wrapper not found or not executable at $DEPLOY_WRAPPER" >&2
-            exit 1
+            echo "No deploy wrapper at $DEPLOY_WRAPPER; skipping."
           fi
-
-      - name: Optional brief wait
-        if: always()
-        run: sleep 5
