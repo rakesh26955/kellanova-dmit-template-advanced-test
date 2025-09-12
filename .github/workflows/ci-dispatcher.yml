@@ -4,27 +4,21 @@ on:
   workflow_call:
     inputs:
       workspace:
-        description: "Workspace path (relative to caller repo root)"
         required: true
         type: string
       group:
-        description: "Group name"
         required: true
         type: string
       project:
-        description: "Project name"
         required: true
         type: string
       environment:
-        description: "Environment name (dev, stage, prod)"
         required: true
         type: string
       instance:
-        description: "Instance (author|publish|both)"
         required: true
         type: string
       pool:
-        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|...)"
         required: true
         type: string
     secrets:
@@ -34,27 +28,21 @@ on:
   workflow_dispatch:
     inputs:
       workspace:
-        description: "Workspace path (relative to repo root)"
         required: true
         type: string
       group:
-        description: "Group name"
         required: true
         type: string
       project:
-        description: "Project name"
         required: true
         type: string
       environment:
-        description: "Environment name (dev, stage, prod)"
         required: true
         type: string
       instance:
-        description: "Instance (author|publish|both)"
         required: true
         type: string
       pool:
-        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65...)"
         required: true
         type: string
 
@@ -65,16 +53,16 @@ jobs:
   run-scripts:
     runs-on: self-hosted-0009
     steps:
-      - name: Checkout caller (application) repository
+      - name: Checkout application repository
         uses: actions/checkout@v4
         with:
           path: app
 
-      - name: Checkout template repository (scripts)
+      - name: Checkout Kellanova repository (scripts)
         uses: actions/checkout@v4
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
-          ref: dev
+          ref: main
           token: ${{ secrets.GH_Token }}
           path: temp
           persist-credentials: false
@@ -85,61 +73,35 @@ jobs:
       - name: Validate inputs & map environment token
         id: validate
         run: |
-          # Allowed values for Environment (user-facing)
           allowed_envs="dev stage prod"
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
 
-          # Resolve inputs (works for both workflow_call and workflow_dispatch)
-          IN_WORKSPACE="${{ inputs.workspace || github.event.inputs.workspace }}"
-          IN_GROUP="${{ inputs.group || github.event.inputs.group }}"
-          IN_PROJECT="${{ inputs.project || github.event.inputs.project }}"
-          IN_ENV="${{ inputs.environment || github.event.inputs.environment }}"
-          IN_INSTANCE="${{ inputs.instance || github.event.inputs.instance }}"
-          IN_POOL="${{ inputs.pool || github.event.inputs.pool }}"
+          IN_WORKSPACE="${{ inputs.workspace }}"
+          IN_GROUP="${{ inputs.group }}"
+          IN_PROJECT="${{ inputs.project }}"
+          IN_ENV="${{ inputs.environment }}"
+          IN_INSTANCE="${{ inputs.instance }}"
+          IN_POOL="${{ inputs.pool }}"
 
-          echo "Resolved inputs:"
-          echo "  workspace: $IN_WORKSPACE"
-          echo "  group:     $IN_GROUP"
-          echo "  project:   $IN_PROJECT"
-          echo "  environment: $IN_ENV"
-          echo "  instance:  $IN_INSTANCE"
-          echo "  pool:      $IN_POOL"
-
-          # simple contains helper
           contains() {
-            list="$1"
-            item="$2"
+            list="$1"; item="$2"
             for t in $list; do
-              if [ "$t" = "$item" ]; then
-                return 0
-              fi
+              if [ "$t" = "$item" ]; then return 0; fi
             done
             return 1
           }
 
           if ! contains "$allowed_envs" "$IN_ENV"; then
-            echo "ERROR: Invalid environment: $IN_ENV"
-            echo "Allowed values: $allowed_envs"
-            exit 1
+            echo "ERROR: Invalid environment: $IN_ENV"; exit 1
           fi
-
           if ! contains "$allowed_instances" "$IN_INSTANCE"; then
-            echo "ERROR: Invalid instance: $IN_INSTANCE"
-            echo "Allowed values: $allowed_instances"
-            exit 1
+            echo "ERROR: Invalid instance: $IN_INSTANCE"; exit 1
           fi
-
           if ! contains "$allowed_pools" "$IN_POOL"; then
-            echo "ERROR: Invalid pool: $IN_POOL"
-            echo "Allowed values: $allowed_pools"
-            exit 1
+            echo "ERROR: Invalid pool: $IN_POOL"; exit 1
           fi
 
-          # Map user-friendly environment to script tokens expected by deploy scripts:
-          # dev  -> dev
-          # stage -> stg
-          # prod  -> prd
           case "$IN_ENV" in
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stg" ;;
@@ -157,7 +119,6 @@ jobs:
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Checking for .zip files in: ${WS}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
             echo ".zip files found."
           else
