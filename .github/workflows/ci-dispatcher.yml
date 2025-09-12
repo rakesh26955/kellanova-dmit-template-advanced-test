@@ -53,8 +53,7 @@ jobs:
       - name: Validate inputs & normalize
         id: validate
         run: |
-          set -euo pipefail
-
+          # validate and normalize inputs
           allowed_envs="dev stage prod"
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
@@ -65,12 +64,6 @@ jobs:
           IN_ENV="${{ inputs.environment }}"
           IN_INSTANCE="${{ inputs.instance }}"
           IN_POOL="${{ inputs.pool }}"
-
-          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
 
           contains() {
             list="$1"; item="$2"
@@ -104,14 +97,20 @@ jobs:
             *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
           esac
 
+          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
+          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
+          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
+          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
+          echo "Looking for .zip files in: ${WS}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found in ${WS}"
-            ls -la ${WS}/*.zip || true
+            echo ".zip files found:"
+            ls -la "${WS}"/*.zip || true
           else
             echo "No .zip files found in '${WS}'. Aborting." >&2
             exit 1
@@ -123,7 +122,7 @@ jobs:
           DEBUG: "false"
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
-          if [ -x "$DEPLOY_WRAPPER" ]; then
+          if [ -f "$DEPLOY_WRAPPER" ] && [ -x "$DEPLOY_WRAPPER" ]; then
             bash "$DEPLOY_WRAPPER" \
               "app/${{ steps.validate.outputs.workspace }}" \
               "${{ steps.validate.outputs.group }}" \
