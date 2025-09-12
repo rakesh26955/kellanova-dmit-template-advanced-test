@@ -4,21 +4,27 @@ on:
   workflow_call:
     inputs:
       workspace:
+        description: "Workspace path (relative to caller repo root)"
         required: true
         type: string
       group:
+        description: "Group name"
         required: true
         type: string
       project:
+        description: "Project name"
         required: true
         type: string
       environment:
+        description: "Environment name (dev, stage, prod)"
         required: true
         type: string
       instance:
+        description: "Instance (author|publish|both)"
         required: true
         type: string
       pool:
+        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|newkstl65|kfr63|...)"
         required: true
         type: string
     secrets:
@@ -28,21 +34,27 @@ on:
   workflow_dispatch:
     inputs:
       workspace:
+        description: "Workspace path (relative to repo root)"
         required: true
         type: string
       group:
+        description: "Group name"
         required: true
         type: string
       project:
+        description: "Project name"
         required: true
         type: string
       environment:
+        description: "Environment name (dev, stage, prod)"
         required: true
         type: string
       instance:
+        description: "Instance (author|publish|both)"
         required: true
         type: string
       pool:
+        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|newkstl65|kfr63|...)"
         required: true
         type: string
 
@@ -53,12 +65,12 @@ jobs:
   run-scripts:
     runs-on: self-hosted-0009
     steps:
-      - name: Checkout application repository
+      - name: Checkout application repository (caller)
         uses: actions/checkout@v4
         with:
           path: app
 
-      - name: Checkout Kellanova repository (scripts)
+      - name: Checkout Kellanova repository (scripts & config)
         uses: actions/checkout@v4
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
@@ -67,10 +79,10 @@ jobs:
           path: temp
           persist-credentials: false
 
-      - name: Make deploy script(s) executable
-        run: chmod +x temp/.github/scripts/*.sh
+      - name: Ensure scripts are executable
+        run: chmod +x temp/.github/scripts/*.sh || true
 
-      - name: Validate inputs & map environment token
+      - name: Validate inputs & normalize
         id: validate
         run: |
           allowed_envs="dev stage prod"
@@ -84,52 +96,71 @@ jobs:
           IN_INSTANCE="${{ inputs.instance }}"
           IN_POOL="${{ inputs.pool }}"
 
-          contains() {
-            list="$1"; item="$2"
-            for t in $list; do
-              if [ "$t" = "$item" ]; then return 0; fi
-            done
-            return 1
-          }
-
-          if ! contains "$allowed_envs" "$IN_ENV"; then
-            echo "ERROR: Invalid environment: $IN_ENV"; exit 1
-          fi
-          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
-            echo "ERROR: Invalid instance: $IN_INSTANCE"; exit 1
-          fi
-          if ! contains "$allowed_pools" "$IN_POOL"; then
-            echo "ERROR: Invalid pool: $IN_POOL"; exit 1
-          fi
-
-          case "$IN_ENV" in
-            dev) MAPPED_ENV="dev" ;;
-            stage) MAPPED_ENV="stg" ;;
-            prod) MAPPED_ENV="prd" ;;
-            *) echo "Unexpected mapping error for $IN_ENV"; exit 1 ;;
-          esac
-
-          echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
           echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
           echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
           echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
           echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
           echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
 
-      - name: Check for .zip files in workspace
-        run: |
-          WS="app/${{ steps.validate.outputs.workspace }}"
-          if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found."
-          else
-            echo "No .zip files found in '${WS}'. Aborting."
+          contains() {
+            list="$1"; item="$2"
+            for t in $list; do
+              if [ "$t" = "$item" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          if ! contains "$allowed_envs" "$IN_ENV"; then
+            echo "ERROR: Invalid environment: $IN_ENV" >&2
             exit 1
           fi
 
-      - name: Run deploy-content-packages wrapper
+          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
+            echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
+            exit 1
+          fi
+
+          if ! contains "$allowed_pools" "$IN_POOL"; then
+            echo "ERROR: Invalid pool: $IN_POOL" >&2
+            exit 1
+          fi
+
+          case "$IN_ENV" in
+            dev) MAPPED_ENV="dev" ;;
+            stage) MAPPED_ENV="stg" ;;
+            prod) MAPPED_ENV="prd" ;;
+          esac
+
+          echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for .zip files in workspace
+        run: |
+          WS="app/${{ steps.validate.outputs.workspace }}"
+          echo "Looking for .zip files in: ${WS}"
+          if compgen -G "${WS}/*.zip" > /dev/null; then
+            echo ".zip files found."
+          else
+            echo "No .zip files found in '${WS}'. Aborting." >&2
+            exit 1
+          fi
+
+      - name: Run deploy-content-packages script
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
           chmod +x "$DEPLOY_WRAPPER" || true
+
+          # required envs for the deploy scripts; adjust paths if your runner differs
+          CONFIG_FILE="temp/config/server.properties"
+          WORKSPACE_ROOT="/var/lib/build/workspace"
+          CURL_BIN="/usr/bin/curl"
+          JAR_BIN="jar"
+          UNZIP_BIN="unzip"
+          DEBUG="false"
+
+          export CONFIG_FILE WORKSPACE_ROOT CURL_BIN JAR_BIN UNZIP_BIN DEBUG
+
           bash "$DEPLOY_WRAPPER" \
             "app/${{ steps.validate.outputs.workspace }}" \
             "${{ steps.validate.outputs.group }}" \
@@ -140,4 +171,4 @@ jobs:
 
       - name: Optional brief wait
         if: always()
-        run: sleep 15
+        run: sleep 5
