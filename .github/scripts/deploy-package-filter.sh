@@ -38,7 +38,12 @@ while IFS= read -r line || [ -n "$line" ]; do
   key="${line%%=*}"
   val="${line#*=}"
   key="$(printf "%s" "$key" | tr -d '[:space:]')"
-  val="$(printf "%s" "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^'(.*)'$/\1/; s/^\"(.*)\"$/\1/")"
+  # trim whitespace and strip optional quotes (single or double)
+  val="$(printf "%s" "$val" \
+    | sed -e 's/^[[:space:]]*//' \
+          -e 's/[[:space:]]*$//' \
+          -e "s/^'//; s/'$//" \
+          -e 's/^"//; s/"$//')"
   props["$key"]="$val"
 done < "$CONFIG_FILE"
 
