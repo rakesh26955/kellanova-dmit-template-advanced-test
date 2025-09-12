@@ -1,441 +1,293 @@
-#!/bin/sh
+#!/bin/bash
 set -euo pipefail
 
 ################################################################################
-# Deploy script (no hardcoded values)
+# deploy-package-filter.sh
+# Replaces the old large hardcoded script with a safe, config-driven version.
 #
-# Required environment variables (must be exported in caller / CI):
-#   CONFIG_FILE        -> path to server.properties (required)
-#   WORKSPACE_ROOT     -> root workspace path (required)
-#   CURL_BIN           -> path to curl binary (required)
-#   JAR_BIN            -> path to jar binary (required)
-#   UNZIP_BIN          -> path to unzip binary (required)
-# Optional environment variables:
-#   CURL_OPTS          -> extra curl options (e.g. "-sS -m 30 --retry 3")
-#   DEBUG              -> if "true" enables debug (no install calls)
+# Usage:
+#   CONFIG_FILE=/var/lib/build/config/server.properties \
+#   WORKSPACE_ROOT=/var/lib/build/workspace \
+#   CURL_BIN=/usr/bin/curl JAR_BIN=jar UNZIP_BIN=unzip DEBUG=true \
+#   bash deploy-package-filter.sh <PackagePath> <PackageName> <Group> <Project> <Environment> <Instance> <Pool>
 #
-# Script arguments:
-#   $1 = PackagePath  (dir containing package files, trailing slash optional)
-#   $2 = PackageName  (name prefix to search for)
-#   $3 = Group        (group name used in workspace path)
-#   $4 = ProjectName  (project name used in workspace path)
-#   $5 = Environment  (e.g., dev, stg, prd, devqa, preview, uatkfr, etc.)
-#   $6 = Instance     (author|publish|both)
-#   $7 = Pool         (kstl|kfr|gen|dam|... — must correspond to keys in server.properties)
+# Arguments:
+#   $1 PackagePath  - directory (relative or absolute) where .zip/.jar packages are located
+#   $2 PackageName  - name prefix (used to find artifact, and to set package property name)
+#   $3 Group        - group (used in workspace layout)
+#   $4 Project      - project (used in workspace layout)
+#   $5 Environment  - dev | stg | prd | devqa | prv | uatkfr | etc.
+#   $6 Instance     - author | publish | both
+#   $7 Pool         - kstl | kfr | gen | dam | kstl65 | kfr65 | newkstl65 | etc.
 #
-# Behavior notes:
-# - All server host values must be present in CONFIG_FILE (server.properties) and include host:port when needed.
-# - The script sources CONFIG_FILE into environment variables (export KEY="value").
-# - The script finds server lists by matching exported variable names that contain environment and pool and "author"/"publish".
-# - Script will exit if it cannot find required variables in CONFIG_FILE or if any required env var is missing.
+# Environment variables required:
+#   CONFIG_FILE      - path to server.properties containing keys/values
+#   WORKSPACE_ROOT   - workspace root (e.g. /var/lib/build/workspace)
+#   CURL_BIN         - path to curl binary
+#   UNZIP_BIN        - path to unzip binary
+#   JAR_BIN          - path to jar (or jar provided by JDK)
+# Optional:
+#   DEBUG            - if "true" will dry-run install steps
+#   CURL_OPTS        - additional options to pass to curl
+#   max_package_size - can be set in CONFIG_FILE (MB)
+#
 ################################################################################
 
-# -------------------------
-# Helper: error & usage
-# -------------------------
-die() {
-    echo "ERROR: $*" >&2
-    exit 1
-}
+die() { echo "ERROR: $*" >&2; exit 1; }
+info() { echo "INFO: $*"; }
 
-usage() {
-    echo "Usage: $0 <PackagePath> <PackageName> <Group> <ProjectName> <Environment> <Instance> <Pool>"
-    echo "Please export required environment variables before running (see top of script)."
-    exit 1
-}
+if [ $# -ne 7 ]; then
+  die "Usage: $0 <PackagePath> <PackageName> <Group> <Project> <Environment> <Instance> <Pool>"
+fi
 
-# -------------------------
-# Validate required envs
-# -------------------------
-: "${CONFIG_FILE:?}"       # fail if not set
-: "${WORKSPACE_ROOT:?}"
-: "${CURL_BIN:?}"
-: "${JAR_BIN:?}"
-: "${UNZIP_BIN:?}"
-# optional
-CURL_OPTS=${CURL_OPTS:-}
-DEBUG=${DEBUG:-false}
+# args
+INPUT_PATH="$1"
+PACKAGE_PREFIX="$2"
+GROUP="$3"
+PROJECT="$4"
+ENVIRONMENT="$5"
+INSTANCE="$6"
+POOL="$7"
 
-# -------------------------
-# Validate args
-# -------------------------
-[ "$#" -ge 7 ] || usage
+# env validations
+: "${CONFIG_FILE:?CONFIG_FILE must be set (path to server.properties)}"
+: "${WORKSPACE_ROOT:?WORKSPACE_ROOT must be set}"
+: "${CURL_BIN:?CURL_BIN must be set}"
+: "${UNZIP_BIN:?UNZIP_BIN must be set}"
+: "${JAR_BIN:?JAR_BIN must be set}"
 
-inputpath=$1
-package=$2
-group=$3
-project=$4
-environment=$5
-instance=$6
-pool=$7
+CURL_OPTS="${CURL_OPTS:-}"
+DEBUG="${DEBUG:-true}"
 
 # normalize
 lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
-environment=$(lower "$environment")
-instance=$(lower "$instance")
-pool=$(lower "$pool")
+ENV_LC=$(lower "$ENVIRONMENT")
+INST_LC=$(lower "$INSTANCE")
+POOL_LC=$(lower "$POOL")
 
-# ensure inputpath ends with slash
-case "$inputpath" in */) ;; *) inputpath="$inputpath/";; esac
+# ensure trailing slash on input path
+case "$INPUT_PATH" in */) ;; *) INPUT_PATH="$INPUT_PATH/";; esac
 
-# -------------------------
-# Source server.properties safely
-# -------------------------
-if [ ! -f "$CONFIG_FILE" ]; then
-    die "CONFIG_FILE '$CONFIG_FILE' not found"
-fi
+[ -f "$CONFIG_FILE" ] || die "CONFIG_FILE not found at $CONFIG_FILE"
 
-# create sanitized temp file to export properties
-cfg_tmp=$(mktemp)
-# drop comments and blanks, wrap values in double quotes if not already, export KEY="value"
-grep -E -v '^\s*#' "$CONFIG_FILE" | sed -E '/^\s*$/d' | while IFS= read -r line; do
-    # skip if no '='
-    echo "$line" | grep -q "=" || continue
-    key=$(echo "$line" | cut -d'=' -f1 | tr -d '[:space:]')
-    val=$(echo "$line" | cut -d'=' -f2-)
-    # trim
-    val=$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    # convert single quotes to double and ensure quoted
-    if echo "$val" | grep -q "^'.*'\$"; then
-        val=$(echo "$val" | sed -E "s/^'(.*)'$/\"\\1\"/")
-    elif echo "$val" | grep -q '^".*"$'; then
-        # keep
-        :
-    else
-        val="\"$val\""
-    fi
-    printf "export %s=%s\n" "$key" "$val" >> "$cfg_tmp"
-done
+# Load config file into environment variables (handles KEY=val lines, strips comments/empty)
+# Preserves quotes for values that contain special chars (e.g., passwords with colon)
+TMP_CFG=$(mktemp)
+trap 'rm -f "$TMP_CFG"' EXIT
+grep -E -v '^\s*#' "$CONFIG_FILE" | sed -E '/^\s*$/d' > "$TMP_CFG"
 
-# shellcheck source=/dev/null
-. "$cfg_tmp"
-rm -f "$cfg_tmp"
+# Export each KEY=VALUE safely
+while IFS='=' read -r key val; do
+  [ -z "$key" ] && continue
+  key=$(echo "$key" | tr -d '[:space:]')
+  # preserve surrounding quotes in value for now, then remove only outer quotes for export
+  val=$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  # remove leading and trailing single or double quotes for export value
+  val_unquoted=$(echo "$val" | sed -E "s/^'(.*)'$/\\1/; s/^\"(.*)\"$/\\1/")
+  export "$key"="$val_unquoted"
+done < "$TMP_CFG"
 
-# After sourcing, server.properties keys are exported to env (e.g. dev_kstl_aem_authors=...).
-# check that build credentials exist (aem_build_user)
-if [ -z "${aem_build_user:-}" ]; then
-    die "aem_build_user not found in $CONFIG_FILE (expected 'aem_build_user=<user>:<password>')"
-fi
-
-# parse username:password (handles quotes)
+# parse build user
 AEM_DEPLOY_USERNAME=$(echo "$aem_build_user" | awk -F: '{print $1}' | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
 AEM_DEPLOY_PASSWORD=$(echo "$aem_build_user" | awk -F: '{print $2}' | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+[ -n "$AEM_DEPLOY_USERNAME" ] || die "aem_build_user missing or malformed in $CONFIG_FILE"
 
-if [ -z "$AEM_DEPLOY_USERNAME" ] || [ -z "$AEM_DEPLOY_PASSWORD" ]; then
-    die "Parsed aem_build_user is empty (check CONFIG_FILE). Expected format: user:password"
-fi
-
-# -------------------------
-# Find matching AEM server variables from exported properties
-# Strategy:
-#  - Search environment variables (exported from server.properties) for names containing
-#    the tokens for environment and pool and either 'author' or 'publish' (case-insensitive).
-#  - For instance=both, we collect both author & publisher lists.
-# -------------------------
-env_token="$environment"
-pool_token="$pool"
-
-# helper: lowercased env list of variables
-matched_authors=""
-matched_publishers=""
-
-# iterate over environment variables and find keys that match tokens
-# use 'env' to list exported variables from properties (format KEY=VALUE)
-env | while IFS= read -r line; do
-    key=$(printf "%s" "$line" | cut -d'=' -f1)
-    key_lc=$(lower "$key")
-    val=$(printf "%s" "$line" | cut -d'=' -f2-)
-    # match both tokens
-    if echo "$key_lc" | grep -q "$env_token" && echo "$key_lc" | grep -q "$pool_token"; then
-        if echo "$key_lc" | grep -q "author"; then
-            # append value (strip surrounding quotes if any)
-            # use eval-safe approach to preserve commas in values
-            v=$(printf "%s" "$val" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-            if [ -z "$matched_authors" ]; then
-                matched_authors="$v"
-            else
-                matched_authors="$matched_authors,$v"
-            fi
-        fi
-        if echo "$key_lc" | grep -q "publish"; then
-            v=$(printf "%s" "$val" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-            if [ -z "$matched_publishers" ]; then
-                matched_publishers="$v"
-            else
-                matched_publishers="$matched_publishers,$v"
-            fi
-        fi
+# helper: find server variable names that match environment token & pool token
+# patterning: keys are like dev_kstl_aem_authors or prd_gen_aem_publishers etc.
+# We'll collect authors/publishers/dispatchers for the given pool and environment.
+collect_servers() {
+  env_token="$1"   # e.g., dev, stg, prd, devqa, prv, uatkfr
+  pool_token="$2"  # e.g., kstl, kfr, gen, dam
+  role="$3"        # author|publish|dispatchers|all (author/publish selection)
+  out=""
+  # Use env to list all loaded variables
+  while IFS='=' read -r k v; do
+    k_lc=$(echo "$k" | tr '[:upper:]' '[:lower:]')
+    if echo "$k_lc" | grep -q "^${env_token}_" && echo "$k_lc" | grep -q "_${pool_token}_"; then
+      if [ "$role" = "author" ] && echo "$k_lc" | grep -q "author"; then
+        out="${out},${v}"
+      elif [ "$role" = "publish" ] && echo "$k_lc" | grep -q "publish"; then
+        out="${out},${v}"
+      elif [ "$role" = "dispatchers" ] && echo "$k_lc" | grep -q "dispatcher"; then
+        out="${out},${v}"
+      elif [ "$role" = "all" ]; then
+        out="${out},${v}"
+      fi
     fi
-done
-
-# Because the while loop above runs in a subshell, transfer matched values back:
-# We'll reconstruct by grepping env again (shell-friendly)
-get_matched() {
-    pattern_env="$1"
-    pattern_pool="$2"
-    pattern_role="$3"   # author or publish or both
-    out=""
-    while IFS= read -r line; do
-        k=$(printf "%s" "$line" | cut -d'=' -f1)
-        k_lc=$(lower "$k")
-        v=$(printf "%s" "$line" | cut -d'=' -f2-)
-        v=$(printf "%s" "$v" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-        if echo "$k_lc" | grep -q "$pattern_env" && echo "$k_lc" | grep -q "$pattern_pool"; then
-            if [ "$pattern_role" = "author" ] && echo "$k_lc" | grep -q "author"; then
-                out=$(printf "%s,%s" "$out" "$v")
-            elif [ "$pattern_role" = "publish" ] && echo "$k_lc" | grep -q "publish"; then
-                out=$(printf "%s,%s" "$out" "$v")
-            elif [ "$pattern_role" = "both" ]; then
-                if echo "$k_lc" | grep -q "author"; then out=$(printf "%s,%s" "$out" "$v"); fi
-                if echo "$k_lc" | grep -q "publish"; then out=$(printf "%s,%s" "$out" "$v"); fi
-            fi
-        fi
-    done <<EOF
-$(env)
-EOF
-    # trim leading comma
-    echo "$out" | sed -E 's/^,+//; s/,,+/,/g; s/,$//'
+  done < <(env)
+  # normalise commas
+  echo "$out" | sed -E 's/^,+//; s/,+$//; s/,,+/,/g'
 }
 
-case "$instance" in
-    author)  AEM_SERVERS=$(get_matched "$env_token" "$pool_token" "author") ;;
-    publish) AEM_SERVERS=$(get_matched "$env_token" "$pool_token" "publish") ;;
-    both)    AEM_SERVERS=$(get_matched "$env_token" "$pool_token" "both") ;;
-    *) die "Unknown instance '$instance'. Use author|publish|both." ;;
+# Decide which servers to use based on $INSTANCE
+case "$INST_LC" in
+  author) ROLE="author" ;;
+  publish) ROLE="publish" ;;
+  both) ROLE="both" ;;
+  *) die "Invalid instance: $INSTANCE (use author|publish|both)" ;;
 esac
 
-[ -n "$AEM_SERVERS" ] || die "No servers found for environment='$environment' pool='$pool' instance='$instance' in $CONFIG_FILE"
-
-# remove duplicate commas and spaces
-AEM_SERVERS=$(echo "$AEM_SERVERS" | sed -E 's/,[[:space:]]*/,/g' | sed -E 's/^,+//; s/,+$//')
-
-echo "Resolved AEM_SERVERS: $AEM_SERVERS"
-
-# Determine buildAllowed variable name in properties: look for <env>_build_allowed or fallback to <env>_build_allowed alias
-buildAllowedVarCandidates="${environment}_build_allowed ${environment}_build_allowed"
-buildAllowed=""
-for cand in $buildAllowedVarCandidates; do
-    # use env to check
-    v=$(env | awk -F= -v k="$cand" '$1==k{print substr($0, index($0, "=")+1)}')
-    if [ -n "$v" ]; then
-        buildAllowed="$v"
-        break
-    fi
-done
-# fallback: try common variants (dev, stage->stage_build_allowed, production->production_build_allowed)
-if [ -z "$buildAllowed" ]; then
-    buildAllowed=$(env | awk -F= -v pat="${environment}_build_allowed" 'tolower($1)~tolower(pat){print substr($0, index($0,"=")+1)}' || true)
+# Collect servers: if both, concat authors and publishers
+if [ "$ROLE" = "both" ]; then
+  AEM_AUTHORS=$(collect_servers "$ENV_LC" "$POOL_LC" "author" || true)
+  AEM_PUBLISHERS=$(collect_servers "$ENV_LC" "$POOL_LC" "publish" || true)
+  AEM_SERVERS=""
+  [ -n "$AEM_AUTHORS" ] && AEM_SERVERS="${AEM_SERVERS},${AEM_AUTHORS}"
+  [ -n "$AEM_PUBLISHERS" ] && AEM_SERVERS="${AEM_SERVERS},${AEM_PUBLISHERS}"
+  AEM_SERVERS=$(echo "$AEM_SERVERS" | sed -E 's/^,+//; s/,+$//; s/,,+/,/g')
+else
+  AEM_SERVERS=$(collect_servers "$ENV_LC" "$POOL_LC" "$ROLE")
 fi
 
-if [ -z "$buildAllowed" ]; then
-    die "Could not find build permission variable for environment '$environment' in $CONFIG_FILE (expected e.g. ${environment}_build_allowed)"
+[ -n "$AEM_SERVERS" ] || die "No servers resolved for environment='$ENVIRONMENT' pool='$POOL' instance='$INSTANCE'. Check $CONFIG_FILE keys."
+
+info "Resolved AEM servers: $AEM_SERVERS"
+
+# Validate build permission flag naming convention (env_build_allowed)
+build_flag_name="${ENV_LC}_build_allowed"
+# Find the variable in environment ignoring case
+build_allowed=""
+while IFS='=' read -r k v; do
+  if [ "$(echo "$k" | tr '[:upper:]' '[:lower:]')" = "$build_flag_name" ]; then
+    build_allowed="$v"
+    break
+  fi
+done < <(env)
+
+[ -n "$build_allowed" ] || die "Build permission flag '$build_flag_name' not found in $CONFIG_FILE"
+
+if echo "$build_allowed" | grep -qi false; then
+  die "Builds not allowed for environment '$ENVIRONMENT' (flag $build_flag_name is false)"
 fi
 
-# parse buildAllowed and ensure at least one 'true' entry
-ok=false
-echo "Build policy: $buildAllowed"
-for token in $(echo "$buildAllowed" | sed 's/,/ /g'); do
-    if echo "$token" | grep -qi "true"; then ok=true; fi
-done
-if [ "$ok" != "true" ]; then
-    die "Builds are not allowed for environment '$environment' per buildAllowed='$buildAllowed'"
-fi
+info "Builds allowed for environment '$ENVIRONMENT'"
 
-# -------------------------
-# Find package file and check size
-# -------------------------
-[ -d "$inputpath" ] || die "inputpath '$inputpath' does not exist"
+# find the matching artifact file
+ARTIFACT=$(ls -t "$INPUT_PATH" 2>/dev/null | grep -E "^${PACKAGE_PREFIX}.*" | head -n1 || true)
+[ -n "$ARTIFACT" ] || die "No artifact matching prefix '^${PACKAGE_PREFIX}' found in $INPUT_PATH"
+ARTIFACT_PATH="${INPUT_PATH}${ARTIFACT}"
+[ -f "$ARTIFACT_PATH" ] || die "Artifact file not present: $ARTIFACT_PATH"
 
-# find latest file whose name starts with package
-jarfileloc=$(ls -t "$inputpath" | grep -E "^$package" | head -n1 || true)
-[ -n "$jarfileloc" ] || die "No file matching '^$package' found in $inputpath"
-jarfileloc="$inputpath$jarfileloc"
-[ -f "$jarfileloc" ] || die "Selected package file '$jarfileloc' does not exist"
+info "Selected artifact: $ARTIFACT_PATH"
 
-echo "Selected package: $jarfileloc"
-
-# file size check — server.properties may expose max_package_size variable name
+# file size check (max_package_size expected in config)
 if [ -n "${max_package_size:-}" ]; then
-    # interpret max_package_size as megabytes
-    max_mb=$(printf "%s" "$max_package_size" | sed -E 's/[^0-9]*//g')
-    if command -v du >/dev/null 2>&1; then
-        actual_mb=$(du -m "$jarfileloc" | awk '{print $1}')
-    else
-        bytes=$(wc -c < "$jarfileloc")
-        actual_mb=$((bytes / 1024 / 1024))
-    fi
-    if [ "$actual_mb" -ge "$max_mb" ]; then
-        die "Package size ${actual_mb}MB exceeds allowed max_package_size ${max_mb}MB"
-    fi
-    echo "Package size ${actual_mb}MB within limit ${max_mb}MB"
+  MAX_MB=$(echo "$max_package_size" | sed -E 's/[^0-9]*//g')
+  if command -v du >/dev/null 2>&1; then
+    ACTUAL_MB=$(du -m "$ARTIFACT_PATH" | awk '{print $1}')
+  else
+    BYTES=$(wc -c < "$ARTIFACT_PATH")
+    ACTUAL_MB=$((BYTES / 1024 / 1024))
+  fi
+  if [ "$ACTUAL_MB" -ge "$MAX_MB" ]; then
+    die "Artifact ${ARTIFACT_PATH} size ${ACTUAL_MB}MB >= max_package_size ${MAX_MB}MB"
+  fi
+  info "Artifact size ${ACTUAL_MB}MB <= ${MAX_MB}MB"
 else
-    echo "Warning: max_package_size not defined in $CONFIG_FILE — skipping size check"
+  info "max_package_size not defined; skipping size check"
 fi
 
-# detect zip or jar
-bZip=false
-case "$jarfileloc" in
-    *.zip) bZip=true ;;
-    *.jar) bZip=false ;;
-    *) die "Unsupported package type (not .zip or .jar): $jarfileloc" ;;
+# Determine if zip or jar
+IS_ZIP=false
+case "$ARTIFACT_PATH" in
+  *.zip) IS_ZIP=true ;;
+  *.jar) IS_ZIP=false ;;
+  *) die "Unsupported artifact type (not .zip or .jar): $ARTIFACT_PATH" ;;
 esac
 
-# -------------------------
-# Prepare workspace / temp paths (no hardcoded root - use WORKSPACE_ROOT)
-# -------------------------
-explodePathRoot="${WORKSPACE_ROOT%/}/${group}/${project}"
-explodePath="${explodePathRoot}/temp"
-mkdir -p "$explodePath"
-# ensure filter.txt exists (mimic original behaviour) but keep location controlled by WORKSPACE_ROOT
-if [ ! -f "${explodePathRoot}/../filter.txt" ]; then
-    # create at workspace level if missing
-    mkdir -p "$(dirname "${explodePathRoot}/../filter.txt")" || true
-    echo '/' > "${explodePathRoot}/../filter.txt"
-fi
-
-# -------------------------
-# Extract META-INF/vault/{filter.xml,properties.xml}
-# -------------------------
-if [ "$bZip" = "true" ]; then
-    "$UNZIP_BIN" -o "$jarfileloc" "META-INF/vault/filter.xml" -d "$explodePath" >/dev/null 2>&1 || true
-    "$UNZIP_BIN" -o "$jarfileloc" "META-INF/vault/properties.xml" -d "$explodePath" >/dev/null 2>&1 || true
+# Extract package property name from META-INF/vault/properties.xml if present
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+if [ "$IS_ZIP" = true ]; then
+  "$UNZIP_BIN" -o "$ARTIFACT_PATH" "META-INF/vault/properties.xml" -d "$TMP_DIR" >/dev/null 2>&1 || true
 else
-    # use jar to extract into explodePath, with fallback to copying whole META-INF if needed
-    (cd "$explodePath" && "$JAR_BIN" xvf "$jarfileloc" "META-INF/vault/filter.xml" >/dev/null 2>&1 || true)
-    (cd "$explodePath" && "$JAR_BIN" xvf "$jarfileloc" "META-INF/vault/properties.xml" >/dev/null 2>&1 || true)
+  (cd "$TMP_DIR" && "$JAR_BIN" xvf "$ARTIFACT_PATH" "META-INF/vault/properties.xml" >/dev/null 2>&1 || true)
 fi
 
-propfile="${explodePath}/META-INF/vault/properties.xml"
-propname=""
-if [ -f "$propfile" ]; then
-    while IFS= read -r i; do
-        if echo "$i" | grep -q "<name>"; then
-            propname=$(echo "$i" | cut -f2 -d">" | cut -f1 -d"<")
-            break
-        fi
-    done < "$propfile"
+PROP_NAME=""
+if [ -f "$TMP_DIR/META-INF/vault/properties.xml" ]; then
+  PROP_NAME=$(sed -n 's:.*<name>\(.*\)</name>.*:\1:p' "$TMP_DIR/META-INF/vault/properties.xml" | head -n1 || true)
 fi
-# fallback to package name if not found
-if [ -z "$propname" ]; then
-    propname="$package"
-fi
-echo "Package property name: $propname"
 
-# -------------------------
-# list_packages function (uses CURL_BIN and AEM credentials)
-# returns: sets global variables 'pkg_path' and 'pkg_version' (if found)
-# -------------------------
-pkg_path=""
-pkg_version=""
-list_packages() {
-    local server_ip="$1"
-    local server_port="$2"
-    local tmpout="$3"
-    pkg_path=""
-    pkg_version=""
-    "$CURL_BIN" $CURL_OPTS -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" \
-        "http://${server_ip}:${server_port}/crx/packmgr/service.jsp?cmd=ls" > "$tmpout" 2>/dev/null || true
+[ -n "$PROP_NAME" ] || PROP_NAME="$PACKAGE_PREFIX"
+info "Package property name: $PROP_NAME"
 
-    # parse XML-style output for <name> entries and the preceding group
-    # We attempt to find <name>propname</name> and then look back for the group node
-    if grep -q "<name>$propname</name>" "$tmpout"; then
-        # find the line number of matched <name>
-        line_no=$(grep -n "<name>$propname</name>" "$tmpout" | head -n1 | cut -d: -f1)
-        # look backwards for the group entry (approximate by finding previous <group>...</group> or parent path)
-        # simpler approach: attempt to extract parent path from previous lines
-        # fallback to /etc/packages/<group> if not discovered
-        group_line=$(sed -n "$((line_no-5)),$line_no p" "$tmpout" | grep -Eo "<group>[^<]*</group>" | tail -n1 || true)
-        if [ -n "$group_line" ]; then
-            groupval=$(echo "$group_line" | sed -E 's/<\/?group>//g' | tr -d '[:space:]')
-            pkg_path="/etc/packages/${groupval}/"
-        else
-            # best-effort: look for path-like token in previous lines
-            path_guess=$(sed -n "$((line_no-5)),$line_no p" "$tmpout" | grep -Eo "/etc/packages/[^<[:space:]]+" | head -n1 || true)
-            if [ -n "$path_guess" ]; then
-                pkg_path="$path_guess/"
-            else
-                # fallback: empty (we will fail later if install cannot be constructed)
-                pkg_path=""
-            fi
-        fi
-        # attempt to find version from following lines (if any)
-        version_line=$(sed -n "$line_no,$((line_no+5)) p" "$tmpout" | grep -Eo "<version>[^<]*</version>" | head -n1 || true)
-        if [ -n "$version_line" ]; then
-            pkg_version=$(echo "$version_line" | sed -E 's/<\/?version>//g' | tr -d '[:space:]')
-        fi
+# Convert AEM_SERVERS csv to array
+IFS=',' read -r -a SERVERS <<< "$AEM_SERVERS"
+
+# helper to list packages on server and detect path/version for our package
+discover_remote_package() {
+  server_host="$1"
+  server_port="$2"
+  tmpfile="$3"
+  "$CURL_BIN" $CURL_OPTS -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" "http://${server_host}:${server_port}/crx/packmgr/service.jsp?cmd=ls" > "$tmpfile" 2>/dev/null || true
+  if grep -q "<name>${PROP_NAME}</name>" "$tmpfile"; then
+    # find enclosing entry to get group and version
+    start_line=$(grep -n "<name>${PROP_NAME}</name>" "$tmpfile" | head -n1 | cut -d: -f1)
+    # grab a small window around that line
+    window_start=$(( start_line - 10 )); [ $window_start -lt 1 ] && window_start=1
+    window_end=$(( start_line + 10 ))
+    entry_block=$(sed -n "${window_start},${window_end}p" "$tmpfile")
+    group_val=$(echo "$entry_block" | sed -n 's:.*<group>\(.*\)</group>.*:\1:p' | head -n1 || true)
+    version_val=$(echo "$entry_block" | sed -n 's:.*<version>\(.*\)</version>.*:\1:p' | head -n1 || true)
+    if [ -n "$group_val" ]; then
+      pkg_path="/etc/packages/${group_val}/"
+    else
+      # fallback: try to detect path fragment
+      guessed=$(echo "$entry_block" | grep -oE '/etc/packages/[A-Za-z0-9._/-]+' | head -n1 || true)
+      [ -n "$guessed" ] && pkg_path="${guessed}/" || pkg_path="/etc/packages/"
     fi
+    if [ -n "$version_val" ]; then
+      pkg_filename="${PROP_NAME}-${version_val}.zip"
+    else
+      pkg_filename="${PROP_NAME}.zip"
+    fi
+    echo "${pkg_path}${pkg_filename}"
+    return 0
+  fi
+  return 1
 }
 
-# -------------------------
-# Upload & Install loop
-# -------------------------
-# Convert AEM_SERVERS (comma separated) to words
-IFS=',' read -r -a server_array <<EOF
-$AEM_SERVERS
-EOF
+# upload & install to each server
+for s in "${SERVERS[@]}"; do
+  s=$(echo "$s" | sed -e 's/^ *//' -e 's/ *$//')
+  host=$(echo "$s" | awk -F: '{print $1}')
+  port=$(echo "$s" | awk -F: '{print $2}')
+  [ -n "$host" ] || die "Empty host in server entry '$s'"
+  [ -n "$port" ] || die "Empty port in server entry '$s'"
 
-for server in "${server_array[@]}"; do
-    server=$(echo "$server" | sed -e 's/^ *//' -e 's/ *$//')
-    # extract host and port (if provided)
-    host=$(echo "$server" | awk -F: '{print $1}')
-    port=$(echo "$server" | awk -F: '{print $2}')
-    if [ -z "$host" ]; then
-        echo "Skipping empty server entry"
-        continue
+  info "Uploading artifact to ${host}:${port}"
+  upload_out=$("$CURL_BIN" $CURL_OPTS -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -F "name=${PACKAGE_PREFIX}" -F "file=@${ARTIFACT_PATH}" "http://${host}:${port}/crx/packmgr/service.jsp" || true)
+  info "Upload response (truncated): $(printf "%s" "$upload_out" | head -c 400)"
+
+  tmp_list=$(mktemp)
+  if discover_remote_package "$host" "$port" "$tmp_list"; then
+    remote_pkg_path=$(discover_remote_package "$host" "$port" "$tmp_list")
+  else
+    remote_pkg_path=""
+  fi
+  rm -f "$tmp_list"
+
+  if [ -z "$remote_pkg_path" ]; then
+    die "Could not determine remote package path for ${PROP_NAME} on ${host}:${port}"
+  fi
+
+  # url encode spaces
+  pkg_url=$(printf "%s" "$remote_pkg_path" | sed 's/ /%20/g')
+  install_url="http://${host}:${port}/crx/packmgr/service/.json${pkg_url}?cmd=install&force=true&recursive=true"
+  info "Installing package at ${install_url}"
+
+  if [ "$DEBUG" = "true" ]; then
+    info "[DEBUG] Skipping install (DEBUG=true). Install URL: $install_url"
+  else
+    install_res=$("$CURL_BIN" $CURL_OPTS -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "$install_url" || true)
+    info "Install response (truncated): $(printf "%s" "$install_res" | head -c 400)"
+    if ! echo "$install_res" | grep -qi success; then
+      die "Install failed on ${host}:${port}"
     fi
-    if [ -z "$port" ]; then
-        die "Server entry '$server' missing port. Please ensure CONFIG_FILE has host:port entries for all servers."
-    fi
+  fi
 
-    echo "Uploading to $host:$port"
-
-    # Upload package
-    upload_response=$("$CURL_BIN" $CURL_OPTS -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" \
-        -F "name=${package}" -F "file=@${jarfileloc}" \
-        "http://${host}:${port}/crx/packmgr/service.jsp" || true)
-    echo "Upload response (truncated): $(printf "%s" "$upload_response" | head -c 400)"
-
-    # create a temporary listing file
-    tmp_listing="$(mktemp)"
-    list_packages "$host" "$port" "$tmp_listing"
-
-    if [ -z "${pkg_path:-}" ]; then
-        rm -f "$tmp_listing"
-        die "Could not determine package path on server $host:$port for package '$propname'. list_packages failed to extract path."
-    fi
-
-    # prepare install URL (choose versioned name if pkg_version found)
-    if [ -n "${pkg_version}" ]; then
-        pkg_full="${pkg_path}${propname}-${pkg_version}.zip"
-    else
-        pkg_full="${pkg_path}${propname}.zip"
-    fi
-
-    # url-encode spaces (basic)
-    pkg_url=$(printf "%s" "$pkg_full" | sed 's/ /%20/g')
-
-    install_url="http://${host}:${port}/crx/packmgr/service/.json${pkg_url}?cmd=install&force=true&recursive=true"
-    echo "Installing $pkg_full on $host:$port"
-
-    if [ "$DEBUG" = "true" ]; then
-        echo "[DEBUG] SKIPPING install call: $install_url"
-    else
-        result=$("$CURL_BIN" $CURL_OPTS -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "$install_url" || true)
-        # basic success check
-        if echo "$result" | grep -qi "success"; then
-            echo "Install reported success on $host"
-        else
-            echo "Install response (truncated): $(printf "%s" "$result" | head -c 400)"
-            rm -f "$tmp_listing"
-            die "Installation failed or did not return success on $host:$port"
-        fi
-    fi
-
-    rm -f "$tmp_listing"
 done
 
-# cleanup extracted META-INF if present
-rm -rf "${explodePath}/META-INF" || true
-
-echo "Deployment completed successfully."
+info "Deployment finished for ${ARTIFACT_PATH}"
 exit 0
