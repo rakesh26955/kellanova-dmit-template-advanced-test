@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# deploy-content-packages.sh
+# Wrapper: iterate workspace *.zip and call deploy-package-filter.sh for each package.
+#
+# Usage:
+#   bash .github/scripts/deploy-content-packages.sh <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]
+
 die(){ echo "ERROR: $*" >&2; exit 1; }
 info(){ echo "INFO: $*"; }
 
-if [ -n "${SERVER_CONFIG:-}" ]; then
-  CONFIG_FILE="${SERVER_CONFIG}"
-else
-  CONFIG_FILE="config/server.properties"
-fi
-
+# --- args ---
 if [ $# -lt 6 ]; then
-  die "Usage: bash $0 <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]"
+  die "Usage: $0 <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]"
 fi
 
 WORKSPACE="$1"
@@ -22,10 +23,12 @@ INSTANCE="$5"
 POOL="$6"
 DEBUG_FLAG="${7:-}"
 
+# --- locate script dir and child deploy script ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY_SCRIPT="${SCRIPT_DIR}/deploy-package-filter.sh"
 [ -f "$DEPLOY_SCRIPT" ] || die "Missing deploy script: $DEPLOY_SCRIPT"
 
+# --- workspace check ---
 if [ ! -d "$WORKSPACE" ]; then
   die "Workspace directory not found: $WORKSPACE"
 fi
@@ -37,18 +40,18 @@ if [ ${#files[@]} -eq 0 ]; then
   die "No .zip files found in workspace: $WORKSPACE"
 fi
 
-if [ -n "${SERVER_CONFIG:-}" ]; then
-  export SERVER_CONFIG
-fi
+# export SERVER_CONFIG for child script (defaulting to .github/config/server.properties)
+export SERVER_CONFIG=".github/config/server.properties"
 
+# iterate packages and call child deploy script
 for f in "${files[@]}"; do
   pkgname="$(basename "$f" .zip)"
   info "Processing package file: $f (package prefix: $pkgname)"
 
   if [ -n "$DEBUG_FLAG" ]; then
-    bash "$DEPLOY_SCRIPT" "$f" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL" "$DEBUG_FLAG"
+    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL" "$DEBUG_FLAG"
   else
-    bash "$DEPLOY_SCRIPT" "$f" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
+    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
   fi
 
   info "Finished processing $pkgname"
