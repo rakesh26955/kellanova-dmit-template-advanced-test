@@ -27,9 +27,6 @@ on:
         description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|newkstl65|kfr63|...)"
         required: true
         type: string
-    secrets:
-      GH_Token:
-        required: true
 
 permissions:
   contents: read
@@ -48,7 +45,6 @@ jobs:
         with:
           repository: rakesh26955/kellanova-dmit-template-advanced-test
           ref: main
-          token: ${{ secrets.GH_Token }}
           path: temp
           persist-credentials: false
 
