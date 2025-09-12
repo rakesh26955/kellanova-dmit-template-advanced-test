@@ -31,40 +31,12 @@ on:
       GH_Token:
         required: true
 
-  workflow_dispatch:
-    inputs:
-      workspace:
-        description: "Workspace path (relative to repo root)"
-        required: true
-        type: string
-      group:
-        description: "Group name"
-        required: true
-        type: string
-      project:
-        description: "Project name"
-        required: true
-        type: string
-      environment:
-        description: "Environment name (dev, stage, prod)"
-        required: true
-        type: string
-      instance:
-        description: "Instance (author|publish|both)"
-        required: true
-        type: string
-      pool:
-        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|newkstl65|kfr63|...)"
-        required: true
-        type: string
-
 permissions:
   contents: write
 
 jobs:
   run-scripts:
     runs-on: self-hosted-0009
-
     steps:
       - name: Checkout application repository (caller)
         uses: actions/checkout@v4
@@ -86,8 +58,6 @@ jobs:
       - name: Validate inputs & normalize
         id: validate
         run: |
-          set -euo pipefail
-
           allowed_envs="dev stage prod"
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
@@ -130,20 +100,16 @@ jobs:
             exit 1
           fi
 
-          # Map inputs to values expected by scripts
           case "$IN_ENV" in
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stage" ;;
             prod) MAPPED_ENV="production" ;;
-            *) echo "ERROR: Invalid environment mapping: $IN_ENV" >&2; exit 1 ;;
           esac
 
-          # expose mapped environment
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
         run: |
-          set -euo pipefail
           WS="app/${{ steps.validate.outputs.workspace }}"
           echo "Looking for .zip files in: ${WS}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
@@ -155,25 +121,17 @@ jobs:
 
       - name: Run deploy-content-packages script
         env:
-          # point scripts to the properties file you checked out into temp/config/
           SERVER_CONFIG: temp/config/server.properties
-          # set DEBUG to "debug" or "true" if you want debug behavior; otherwise "false"
           DEBUG: "false"
-          # keep GH_Token available to steps if needed (not required by scripts themselves)
-          GH_TOKEN: ${{ secrets.GH_Token }}
         run: |
-          set -euo pipefail
-
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
           chmod +x "$DEPLOY_WRAPPER" || true
 
-          # Optional: sanity-check the config file exists
           if [ ! -f "${SERVER_CONFIG}" ]; then
             echo "ERROR: SERVER_CONFIG not found at ${SERVER_CONFIG}" >&2
             exit 1
           fi
 
-          # Execute wrapper script (parent). It will export SERVER_CONFIG further if needed.
           bash "$DEPLOY_WRAPPER" \
             "app/${{ steps.validate.outputs.workspace }}" \
             "${{ steps.validate.outputs.group }}" \
