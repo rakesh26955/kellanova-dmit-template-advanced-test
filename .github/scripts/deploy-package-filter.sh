@@ -20,8 +20,8 @@ INPUTPATH="$1"
 PACK_PREFIX="$2"
 GROUP="$3"
 PROJECT="$4"
-ENVIRONMENT="$5"   # dev|stage|production
-INSTANCE="$6"      # author|publish|both
+ENVIRONMENT="$5"
+INSTANCE="$6"
 POOL="$7"
 DEBUG_FLAG="${8:-}"
 
@@ -125,6 +125,11 @@ for S in "${SERVERS[@]}"; do
   HOST="$(echo "$S" | cut -d: -f1)"
   PORT="$(echo "$S" | cut -d: -f2)"
   [ -n "$PORT" ] || PORT="$DEFAULT_PUBLISH_PORT"
+
+  if [ "${SKIP_DEPLOY:-false}" = "true" ]; then
+    warn "Skipping deployment to $HOST:$PORT (SKIP_DEPLOY=true)"
+    continue
+  fi
 
   info "Uploading to $HOST:$PORT"
   "$CURL_BIN" -s -u "$AEM_DEPLOY_USERNAME:$AEM_DEPLOY_PASSWORD" \
