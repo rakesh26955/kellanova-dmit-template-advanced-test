@@ -60,9 +60,7 @@ jobs:
             exit 1
           fi
           echo "✅ Config file found."
-          echo "----- Showing first 20 lines -----"
           head -n 20 "$CONFIG_PATH" || true
-          echo "----------------------------------"
 
       - name: Validate inputs & normalize
         id: validate
@@ -75,7 +73,6 @@ jobs:
           POOL: ${{ inputs.pool }}
         run: |
           set -euo pipefail
-
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "group=$GROUP" >> "$GITHUB_OUTPUT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
@@ -89,7 +86,6 @@ jobs:
             prod) MAPPED_ENV="prd" ;;
             *) echo "ERROR: Invalid environment: $ENVIRONMENT" >&2; exit 1 ;;
           esac
-
           echo "mapped_environment=$MAPPED_ENV" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
@@ -107,6 +103,7 @@ jobs:
         env:
           SERVER_CONFIG: ${{ github.workspace }}/temp/.github/config/server.properties
           DEBUG: "false"
+          SKIP_DEPLOY: "true"   # 👈 prevents curl uploads during CI runs
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
           if [ -x "$DEPLOY_WRAPPER" ]; then
