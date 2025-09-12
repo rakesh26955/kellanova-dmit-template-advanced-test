@@ -3,7 +3,7 @@ set -euo pipefail
 
 # -------------------------------------------------------------------
 # deploy-package-filter.sh
-# Deploy a single package. Reads runtime values strictly from
+# Deploy a single package. All runtime values are read from
 # .github/config/server.properties (or SERVER_CONFIG override).
 # -------------------------------------------------------------------
 
@@ -20,8 +20,8 @@ INPUTPATH="$1"
 PACK_PREFIX="$2"
 GROUP="$3"
 PROJECT="$4"
-ENVIRONMENT="$5"
-INSTANCE="$6"
+ENVIRONMENT="$5"   # dev|stage|prod
+INSTANCE="$6"      # author|publish|both
 POOL="$7"
 DEBUG_FLAG="${8:-}"
 
@@ -43,7 +43,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     | sed -e 's/^[[:space:]]*//' \
           -e 's/[[:space:]]*$//' \
           -e "s/^'//; s/'$//" \
-          -e 's/^"//; s/"$//')"
+          -e 's/^\"//; s/\"$//')"
   props["$key"]="$val"
 done < "$CONFIG_FILE"
 
@@ -86,14 +86,12 @@ fi
 RUN_ID="$(date +%s)-$$"
 EXPLODE_PATH="${EXPLODE_ROOT%/}/explode-${RUN_ID}"
 
-# Try to create explode dir; fallback if not writable
 if ! mkdir -p "$EXPLODE_PATH" 2>/dev/null; then
   warn "EXPLODE_ROOT $EXPLODE_ROOT not writable, falling back to ${GITHUB_WORKSPACE:-$(pwd)}/build"
   EXPLODE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}/build"
   EXPLODE_PATH="${EXPLODE_ROOT%/}/explode-${RUN_ID}"
   mkdir -p "$EXPLODE_PATH"
 fi
-
 info "Using explode path: $EXPLODE_PATH"
 
 # --- extract metadata ---
@@ -105,10 +103,13 @@ else
   (cd "$EXPLODE_PATH" && "$JAR_BIN" xvf "$JARFILE" META-INF/vault/properties.xml >/dev/null 2>&1 || true)
 fi
 
-# --- determine servers ---
+# --- determine servers dynamically ---
 pool_lc="$(echo "$POOL" | tr '[:upper:]' '[:lower:]')"
-auth_key="${ENVIRONMENT}_${pool_lc}_aem_authors"
-pub_key="${ENVIRONMENT}_${pool_lc}_aem_publishers"
+env_lc="$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')"
+
+auth_key="${env_lc}_${pool_lc}_aem_authors"
+pub_key="${env_lc}_${pool_lc}_aem_publishers"
+
 AEM_SERVERS=""
 if [ "$INSTANCE" = "author" ]; then
   AEM_SERVERS="$(get_prop "$auth_key")"
