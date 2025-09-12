@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# -------------------------------------------------------------------
 # deploy-content-packages.sh
-# Wrapper: iterate workspace *.zip and call deploy-package-filter.sh for each package.
-#
-# Usage:
-#   bash .github/scripts/deploy-content-packages.sh <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]
+# Wrapper: iterate workspace *.zip and call deploy-package-filter.sh
+# -------------------------------------------------------------------
 
 die(){ echo "ERROR: $*" >&2; exit 1; }
 info(){ echo "INFO: $*"; }
@@ -40,7 +39,7 @@ if [ ${#files[@]} -eq 0 ]; then
   die "No .zip files found in workspace: $WORKSPACE"
 fi
 
-# export SERVER_CONFIG for child script (defaulting to .github/config/server.properties)
+# force SERVER_CONFIG to .github/config/server.properties
 export SERVER_CONFIG=".github/config/server.properties"
 
 # iterate packages and call child deploy script
