@@ -49,7 +49,7 @@ if [ ${#files[@]} -eq 0 ]; then
   die "No .zip files found in workspace: $WORKSPACE"
 fi
 
-# export SERVER_CONFIG for child script if present in environment; otherwise nothing (child script will use default)
+# export SERVER_CONFIG for child script if present in environment
 if [ -n "${SERVER_CONFIG:-}" ]; then
   export SERVER_CONFIG
 fi
@@ -59,12 +59,11 @@ for f in "${files[@]}"; do
   pkgname="$(basename "$f" .zip)"
   info "Processing package file: $f (package prefix: $pkgname)"
 
-  # call deploy script with same config handling the deploy script expects
-  # args: <PackagePath> <PackagePrefix> <Group> <Project> <Environment> <Instance> <Pool> [debug]
+  # call deploy script with explicit package file path and prefix
   if [ -n "$DEBUG_FLAG" ]; then
-    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL" "$DEBUG_FLAG"
+    bash "$DEPLOY_SCRIPT" "$f" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL" "$DEBUG_FLAG"
   else
-    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
+    bash "$DEPLOY_SCRIPT" "$f" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
   fi
 
   info "Finished processing $pkgname"
