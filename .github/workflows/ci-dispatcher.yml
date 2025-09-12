@@ -73,6 +73,7 @@ jobs:
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
 
+          # Support being called via workflow_call (inputs.*) or invoked manually (github.event.inputs)
           WORKSPACE="${{ inputs.workspace || github.event.inputs.workspace }}"
           GROUP="${{ inputs.group || github.event.inputs.group }}"
           PROJECT="${{ inputs.project || github.event.inputs.project }}"
