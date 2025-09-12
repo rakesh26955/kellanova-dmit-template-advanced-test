@@ -47,7 +47,6 @@ AEM_DEPLOY_PASSWORD="$(printf "%s" "$AEM_BUILD_USER_RAW" | awk -F: '{print $2}')
 [ -n "$AEM_DEPLOY_USERNAME" ] || die "Invalid aem_build_user value (username missing)"
 [ -n "$AEM_DEPLOY_PASSWORD" ] || die "Invalid aem_build_user value (password missing)"
 
-# explode runtime root setup
 EXPLODE_ROOT_DIR="${EXPLODE_ROOT%/}"
 if [ ! -d "$EXPLODE_ROOT_DIR" ]; then
   mkdir -p "$EXPLODE_ROOT_DIR" || die "Unable to create EXPLODE_ROOT directory: $EXPLODE_ROOT_DIR"
@@ -64,12 +63,7 @@ fi
 EXPLODE_PATH="${EXPLODE_RUNTIME_ROOT}"
 EXPLODE_PATH_ROOT="${EXPLODE_RUNTIME_ROOT}"
 
-help(){
-  echo "invalid number of arguments or help requested"
-  echo "parameters: PackagePath PackageNamePrefix Group Project Environment Instance Pool [debug]"
-  echo "Usage:"
-  echo "  SERVER_CONFIG=config/server.properties bash $0 <PackagePath|PackageFile> <PackagePrefix> <Group> <Project> <Environment> <Instance> <Pool> [debug]"
-}
+help(){ echo "invalid number of arguments or help requested"; echo "parameters: PackagePath PackageNamePrefix Group Project Environment Instance Pool [debug]"; }
 
 validateFilter(){
   if [ -z "$CHECKFILTER_CMD" ]; then
@@ -102,21 +96,17 @@ get_fn_results(){
     die "get_fn_results called but result variable empty"
   fi
   tmp="$result"
-  tmp="$(printf "%s" "$tmp" | sed -E 's/^[\[\(]//; s/[\]\)]$//' )"
+  tmp="$(printf "%s" "$tmp" | sed -E 's/^[\[\(]//; s/[\]\)]$//')"
   IFS=',' read -ra RES <<< "$tmp"
   success="${RES[0]:-}"
   message="${RES[1]:-}"
   success="$(printf "%s" "$success" | tr -d '[:space:]')"
   message="$(printf "%s" "$message" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   if echo "$success" | grep -Eiq "true|1"; then
-    echo ""
-    echo "Successfully processed command."
-    echo ""
+    echo ""; echo "Successfully processed command."; echo ""
     return 0
   else
-    echo ""
-    echo "Function failed with error: $message"
-    echo ""
+    echo ""; echo "Function failed with error: $message"; echo ""
     exit 1
   fi
 }
@@ -164,31 +154,19 @@ list_packages(){
   done < "$packagetst"
 
   if [[ $packfnd != 1 ]]; then
-    echo ""
-    echo "Package not found $packagevar!"
-    echo ""
+    echo ""; echo "Package not found $packagevar!"; echo ""
   fi
 }
 
-main(){
-  inputpath="$1"
-  package="$2"
-  group="$3"
-  project="$4"
-  environment="$5"
-  instance="$6"
-  pool="$7"
-  bDebug="${8:-}"
-
+main(){ 
+  inputpath="$1"; package="$2"; group="$3"; project="$4"; environment="$5"; instance="$6"; pool="$7"; bDebug="${8:-}"
   info "Looking for package prefix '$package' in '$inputpath'"
-
   if [ -d "$inputpath" ]; then
     jarfileloc="$(ls -t "$inputpath" 2>/dev/null | grep -E "^${package}" | head -n1 || true)"
     jarfileloc="${inputpath%/}/${jarfileloc}"
   else
     jarfileloc="$inputpath"
   fi
-
   [ -f "$jarfileloc" ] || die "Package file not found: $jarfileloc"
   info "Package path: $jarfileloc"
 
@@ -224,10 +202,6 @@ main(){
     die "File type not supported: $jarfileloc"
   fi
 
-  servereval="${environment}:${instance}:${pool}"
-  info "Server evaluation token: $servereval"
-
-  # dynamic resolution example
   ENV_TOKEN_KEY="ENV_TOKEN_${environment}"
   ENV_TOKEN="$(get_prop "$ENV_TOKEN_KEY")"
   if [ -n "$ENV_TOKEN" ]; then
@@ -247,36 +221,10 @@ main(){
       die "Invalid instance value: $instance"
     fi
   else
-    die "Combination not identified: $servereval and no ENV_TOKEN mapping present for dynamic resolution."
+    die "Combination not identified: ${environment}:${instance}:${pool} and no ENV_TOKEN mapping present for dynamic resolution."
   fi
 
   info "Selected server values: $AEM_SERVERS"
-
-  if [ -n "$buildAllowedKey" ]; then
-    IFS=',' read -r -a buildkeys <<< "$buildAllowedKey"
-    for bk in "${buildkeys[@]}"; do
-      bk="$(printf "%s" "$bk" | tr -d '[:space:]')"
-      [ -z "$bk" ] && continue
-      if echo "$bk" | grep -Eiq '^(true|false|1|0|yes|no)$'; then
-        val="$bk"
-      else
-        val="${props[$bk]:-}"
-      fi
-      if [ -z "$val" ]; then
-        rm -rf "${EXPLODE_PATH}" >/dev/null 2>&1 || true
-        die "Build allowed flag '$bk' not set or empty in config"
-      fi
-      if echo "$val" | grep -Eiq '^(true|1|yes)$'; then
-        info "Builds enabled for $bk"
-      else
-        rm -rf "${EXPLODE_PATH}" >/dev/null 2>&1 || true
-        die "Builds disabled ($bk=$val)"
-      fi
-    done
-  else
-    warn "No buildAllowedKey set — proceeding but ensure builds are allowed by config if needed."
-  fi
-
   AEM_DEPLOYS="$(printf "%s" "$AEM_SERVERS" | sed 's/,/ /g')"
 
   cd "$EXPLODE_PATH" || { rm -rf "${EXPLODE_PATH}" >/dev/null 2>&1 || true; die "Cannot cd to explode path $EXPLODE_PATH"; }
@@ -313,75 +261,58 @@ main(){
     rm -rf "${EXPLODE_PATH}/META-INF" >/dev/null 2>&1 || true
     rm -rf "${EXPLODE_RUNTIME_ROOT}" >/dev/null 2>&1 || true
     exit 0
+  fi
+
+  result_validate="$(validateFilter "$EXPLODE_PATH" "$group" "$project" || true)"
+  if [ "$result_validate" = "1" ] || [ "$result_validate" = "true" ]; then
+    for AEM_DEPLOY in $AEM_DEPLOYS; do
+      AEM_DEPLOY_IP="$(printf "%s" "$AEM_DEPLOY" | awk -F':' '{print $1}')"
+      AEM_DEPLOY_PORT="$(printf "%s" "$AEM_DEPLOY" | awk -F':' '{print $2}')"
+      if [ -z "$AEM_DEPLOY_PORT" ]; then AEM_DEPLOY_PORT="$DEFAULT_PUBLISH_PORT"; fi
+
+      cmdt="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -F "name=${package}" -F "file=@${jarfileloc}" "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_UPLOAD_PATH}" || true)"
+      info "upload response (trunc): $(printf '%s' "$cmdt" | head -c200)"
+      list_packages "$propname" "${EXPLODE_PATH}/META-INF/worker" || true
+
+      LIST_TMP="$(mktemp)" || LIST_TMP="${EXPLODE_PATH_ROOT}/list_tmp.$$"
+      "$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_UPLOAD_PATH}?cmd=ls" > "$LIST_TMP" || true
+
+      PKG_PATH=""; PKG_VER=""
+      if grep -q "<name>${propname}</name>" "$LIST_TMP" 2>/dev/null; then
+        LN="$(grep -n "<name>${propname}</name>" "$LIST_TMP" | head -n1 | cut -d: -f1 || true)"
+        if [ -n "$LN" ]; then
+          START=$((LN-10)); [ $START -lt 1 ] && START=1
+          END=$((LN+10))
+          BLOCK="$(sed -n "${START},${END}p" "$LIST_TMP" || true)"
+          GROUP_VAL="$(printf "%s" "$BLOCK" | sed -n 's:.*<group>\(.*\)</group>.*:\1:p' | head -n1 || true)"
+          VERSION_VAL="$(printf "%s" "$BLOCK" | sed -n 's:.*<version>\(.*\)</version>.*:\1:p' | head -n1 || true)"
+          if [ -n "$GROUP_VAL" ]; then PKG_PATH="${PKG_BASE_PATH%/}/${GROUP_VAL}/"; else PKG_PATH="${PKG_BASE_PATH%/}/${group}/"; fi
+          PKG_VER="$VERSION_VAL"
+        fi
+      fi
+      rm -f "$LIST_TMP"
+
+      if [ -z "$PKG_VER" ]; then
+        pkg="${PKG_PATH}${propname}"
+        pkg_esc="$(printf "%s" "$pkg" | sed 's/ /%20/g')"
+        result="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_INSTALL_PREFIX}${pkg_esc}.zip?cmd=install&force=true&recursive=true" || true)"
+        get_fn_results "install"
+      else
+        pkg="${PKG_PATH}${propname}-${PKG_VER}"
+        pkg_esc="$(printf "%s" "$pkg" | sed 's/ /%20/g')"
+        result="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_INSTALL_PREFIX}${pkg_esc}.zip?cmd=install&force=true&recursive=true" || true)"
+        get_fn_results "install"
+      fi
+    done
+
+    rm -rf "${EXPLODE_PATH}/META-INF" >/dev/null 2>&1 || true
+    rm -rf "${EXPLODE_RUNTIME_ROOT}" >/dev/null 2>&1 || true
+    exit 0
   else
-    info "evaluating filter:"
-    pfilter="${EXPLODE_PATH}/META-INF/vault/filter.xml"
-    [ -f "$pfilter" ] && cat "$pfilter" || warn "filter.xml not found at $pfilter"
-    result_validate="$(validateFilter "$EXPLODE_PATH" "$group" "$project" || true)"
-    if [ "$result_validate" = "1" ] || [ "$result_validate" = "true" ]; then
-      info "Filters match, proceeding to install..."
-      for AEM_DEPLOY in $AEM_DEPLOYS; do
-        AEM_DEPLOY_IP="$(printf "%s" "$AEM_DEPLOY" | awk -F':' '{print $1}')"
-        AEM_DEPLOY_PORT="$(printf "%s" "$AEM_DEPLOY" | awk -F':' '{print $2}')"
-        if [ -z "$AEM_DEPLOY_PORT" ]; then AEM_DEPLOY_PORT="$DEFAULT_PUBLISH_PORT"; fi
-
-        info "uploading package $package to ${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}"
-        cmdt="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -F "name=${package}" -F "file=@${jarfileloc}" "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_UPLOAD_PATH}" || true)"
-        info "upload response (trunc): $(printf '%s' "$cmdt" | head -c200)"
-
-        info "setting property name for package $propname"
-        list_packages "$propname" "${EXPLODE_PATH}/META-INF/worker" || true
-
-        LIST_TMP="$(mktemp)" || LIST_TMP="$(printf "%s" "${EXPLODE_PATH_ROOT}/list_tmp.$$")"
-        "$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_UPLOAD_PATH}?cmd=ls" > "$LIST_TMP" || true
-
-        PKG_PATH=""
-        PKG_VER=""
-        if grep -q "<name>${propname}</name>" "$LIST_TMP" 2>/dev/null; then
-          LN="$(grep -n "<name>${propname}</name>" "$LIST_TMP" | head -n1 | cut -d: -f1 || true)"
-          if [ -n "$LN" ]; then
-            START=$((LN-10)); [ $START -lt 1 ] && START=1
-            END=$((LN+10))
-            BLOCK="$(sed -n "${START},${END}p" "$LIST_TMP" || true)"
-            GROUP_VAL="$(printf "%s" "$BLOCK" | sed -n 's:.*<group>\(.*\)</group>.*:\1:p' | head -n1 || true)"
-            VERSION_VAL="$(printf "%s" "$BLOCK" | sed -n 's:.*<version>\(.*\)</version>.*:\1:p' | head -n1 || true)"
-            if [ -n "$GROUP_VAL" ]; then PKG_PATH="${PKG_BASE_PATH%/}/${GROUP_VAL}/"; else PKG_PATH="${PKG_BASE_PATH%/}/${group}/"; fi
-            PKG_VER="$VERSION_VAL"
-          fi
-        fi
-        rm -f "$LIST_TMP"
-
-        if [ -z "$PKG_PATH" ]; then
-          PKG_PATH="${PKG_BASE_PATH%/}/${group}/"
-        fi
-
-        if [ -z "$PKG_VER" ]; then
-          echo ""
-          echo "Installing package ${PKG_PATH}${propname}.zip"
-          echo ""
-          pkg="${PKG_PATH}${propname}"
-          pkg_esc="$(printf "%s" "$pkg" | sed 's/ /%20/g')"
-          result="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_INSTALL_PREFIX}${pkg_esc}.zip?cmd=install&force=true&recursive=true" || true)"
-          get_fn_results "install"
-        else
-          echo ""
-          echo "Installing package ${PKG_PATH}${propname}-${PKG_VER}.zip"
-          echo ""
-          pkg="${PKG_PATH}${propname}-${PKG_VER}"
-          pkg_esc="$(printf "%s" "$pkg" | sed 's/ /%20/g')"
-          result="$("$CURL_BIN" -s -u "${AEM_DEPLOY_USERNAME}:${AEM_DEPLOY_PASSWORD}" -X POST "http://${AEM_DEPLOY_IP}:${AEM_DEPLOY_PORT}${CRX_INSTALL_PREFIX}${pkg_esc}.zip?cmd=install&force=true&recursive=true" || true)"
-          get_fn_results "install"
-        fi
-      done
-      rm -rf "${EXPLODE_PATH}/META-INF" >/dev/null 2>&1 || true
-      rm -rf "${EXPLODE_RUNTIME_ROOT}" >/dev/null 2>&1 || true
-      exit 0
-    else
-      echo "Filters do not match, please review package and filter specification."
-      rm -rf "${EXPLODE_PATH}/META-INF" >/dev/null 2>&1 || true
-      rm -rf "${EXPLODE_RUNTIME_ROOT}" >/dev/null 2>&1 || true
-      exit 1
-    fi
+    echo "Filters do not match, please review package and filter specification."
+    rm -rf "${EXPLODE_PATH}/META-INF" >/dev/null 2>&1 || true
+    rm -rf "${EXPLODE_RUNTIME_ROOT}" >/dev/null 2>&1 || true
+    exit 1
   fi
 }
 
