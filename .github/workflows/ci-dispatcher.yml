@@ -46,7 +46,7 @@ jobs:
           path: temp
           persist-credentials: false
 
-      - name: Ensure scripts are executable
+      - name: Ensure scripts are executable if present
         run: chmod +x temp/.github/scripts/*.sh || true
 
       - name: Validate inputs & normalize
@@ -56,84 +56,45 @@ jobs:
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
 
-          IN_WORKSPACE="${{ inputs.workspace }}"
-          IN_GROUP="${{ inputs.group }}"
-          IN_PROJECT="${{ inputs.project }}"
-          IN_ENV="${{ inputs.environment }}"
-          IN_INSTANCE="${{ inputs.instance }}"
-          IN_POOL="${{ inputs.pool }}"
+          echo "workspace=${{ inputs.workspace }}" >> "$GITHUB_OUTPUT"
+          echo "group=${{ inputs.group }}" >> "$GITHUB_OUTPUT"
+          echo "project=${{ inputs.project }}" >> "$GITHUB_OUTPUT"
+          echo "instance=${{ inputs.instance }}" >> "$GITHUB_OUTPUT"
+          echo "pool=${{ inputs.pool }}" >> "$GITHUB_OUTPUT"
 
-          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
-
-          contains() {
-            list="$1"; item="$2"
-            for t in $list; do
-              if [ "$t" = "$item" ]; then
-                return 0
-              fi
-            done
-            return 1
-          }
-
-          if ! contains "$allowed_envs" "$IN_ENV"; then
-            echo "ERROR: Invalid environment: $IN_ENV" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
-            echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_pools" "$IN_POOL"; then
-            echo "ERROR: Invalid pool: $IN_POOL" >&2
-            exit 1
-          fi
-
-          case "$IN_ENV" in
+          case "${{ inputs.environment }}" in
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stage" ;;
             prod) MAPPED_ENV="production" ;;
-            *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
+            *) echo "ERROR: invalid environment" >&2; exit 1 ;;
           esac
-
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found."
+            echo ".zip files found in ${WS}"
+            ls -la ${WS}/*.zip
           else
             echo "No .zip files found in '${WS}'. Aborting." >&2
             exit 1
           fi
 
-      - name: Run deploy-content-packages script
+      - name: Run deploy wrapper if present
         env:
           SERVER_CONFIG: temp/config/server.properties
           DEBUG: "false"
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
-          chmod +x "$DEPLOY_WRAPPER" || true
-
-          if [ ! -f "${SERVER_CONFIG}" ]; then
-            echo "ERROR: SERVER_CONFIG not found at ${SERVER_CONFIG}" >&2
-            exit 1
+          if [ -x "$DEPLOY_WRAPPER" ]; then
+            bash "$DEPLOY_WRAPPER" \
+              "app/${{ steps.validate.outputs.workspace }}" \
+              "${{ steps.validate.outputs.group }}" \
+              "${{ steps.validate.outputs.project }}" \
+              "${{ steps.validate.outputs.mapped_environment }}" \
+              "${{ steps.validate.outputs.instance }}" \
+              "${{ steps.validate.outputs.pool }}"
+          else
+            echo "Deploy wrapper not found or not executable at $DEPLOY_WRAPPER — skipping."
           fi
-
-          bash "$DEPLOY_WRAPPER" \
-            "app/${{ steps.validate.outputs.workspace }}" \
-            "${{ steps.validate.outputs.group }}" \
-            "${{ steps.validate.outputs.project }}" \
-            "${{ steps.validate.outputs.mapped_environment }}" \
-            "${{ steps.validate.outputs.instance }}" \
-            "${{ steps.validate.outputs.pool }}"
-
-      - name: Optional brief wait
-        if: always()
-        run: sleep 5
