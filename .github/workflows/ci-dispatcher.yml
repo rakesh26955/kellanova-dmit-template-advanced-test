@@ -1,4 +1,4 @@
-name: Run Both Shell Scripts Sequentially (env: dev|stage|prod)
+name: Caller — dispatch to ci-dispatcher
 
 on:
   workflow_call:
@@ -62,133 +62,16 @@ permissions:
   contents: read
 
 jobs:
-  run-scripts:
-    runs-on: self-hosted-0009
-    steps:
-      - name: Checkout application repository (caller)
-        uses: actions/checkout@v4
-        with:
-          path: app
-
-      - name: Checkout Kellanova repository (scripts & config)
-        uses: actions/checkout@v4
-        with:
-          repository: rakesh26955/kellanova-dmit-template-advanced-test
-          ref: main
-          token: ${{ secrets.GH_Token }}
-          path: temp
-          persist-credentials: false
-
-      - name: Debug: list temp/.github contents
-        run: |
-          echo "Listing temp root"
-          ls -la || true
-          echo "Listing temp/.github"
-          ls -la temp/.github || true
-          echo "Listing temp/.github/config"
-          ls -la temp/.github/config || true
-          echo "Listing temp/.github/scripts"
-          ls -la temp/.github/scripts || true
-          echo "server.properties head:"
-          head -n 20 temp/.github/config/server.properties || true
-
-      - name: Ensure scripts are executable
-        run: chmod +x temp/.github/scripts/*.sh || true
-
-      - name: Validate inputs & normalize
-        id: validate
-        run: |
-          allowed_envs="dev stage prod"
-          allowed_instances="author publish both"
-          allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
-
-          IN_WORKSPACE="${{ inputs.workspace }}"
-          IN_GROUP="${{ inputs.group }}"
-          IN_PROJECT="${{ inputs.project }}"
-          IN_ENV="${{ inputs.environment }}"
-          IN_INSTANCE="${{ inputs.instance }}"
-          IN_POOL="${{ inputs.pool }}"
-
-          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
-
-          contains() {
-            list="$1"; item="$2"
-            for t in $list; do
-              if [ "$t" = "$item" ]; then
-                return 0
-              fi
-            done
-            return 1
-          }
-
-          if ! contains "$allowed_envs" "$IN_ENV"; then
-            echo "ERROR: Invalid environment: $IN_ENV" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
-            echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_pools" "$IN_POOL"; then
-            echo "ERROR: Invalid pool: $IN_POOL" >&2
-            exit 1
-          fi
-
-          case "$IN_ENV" in
-            dev) MAPPED_ENV="dev" ;;
-            stage) MAPPED_ENV="stg" ;;
-            prod) MAPPED_ENV="prd" ;;
-            *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
-          esac
-
-          echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
-
-      - name: Check for .zip files in workspace
-        run: |
-          WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Checking for packages in: ${WS}"
-          if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found."
-            ls -la ${WS}/*.zip || true
-          else
-            echo "No .zip files found in '${WS}'. Aborting." >&2
-            exit 1
-          fi
-
-      - name: Run deploy wrapper (real deploy)
-        env:
-          # IMPORTANT: point to the temp checkout path so the runner finds the config & scripts
-          SERVER_CONFIG: temp/.github/config/server.properties
-          DEBUG: "false"
-        run: |
-          DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
-          if [ -x "$DEPLOY_WRAPPER" ]; then
-            echo "Running deploy wrapper:"
-            echo "  workspace: app/${{ steps.validate.outputs.workspace }}"
-            echo "  group: ${{ steps.validate.outputs.group }} project: ${{ steps.validate.outputs.project }} env: ${{ steps.validate.outputs.mapped_environment }} instance: ${{ steps.validate.outputs.instance }} pool: ${{ steps.validate.outputs.pool }}"
-            bash "$DEPLOY_WRAPPER" \
-              "app/${{ steps.validate.outputs.workspace }}" \
-              "${{ steps.validate.outputs.group }}" \
-              "${{ steps.validate.outputs.project }}" \
-              "${{ steps.validate.outputs.mapped_environment }}" \
-              "${{ steps.validate.outputs.instance }}" \
-              "${{ steps.validate.outputs.pool }}"
-          else
-            echo "ERROR: Deploy wrapper not found or not executable at $DEPLOY_WRAPPER" >&2
-            exit 1
-          fi
-
-      - name: Cleanup (optional)
-        if: always()
-        run: |
-          echo "Cleanup done."
-
-      - name: Post Checkouts (self)
-        if: always()
-        run: echo "Post checkout cleanup complete."
+  call-ci-dispatcher:
+    # <-- CORRECT: 'uses' at job level to call external reusable workflow
+    uses: rakesh26955/kellanova-dmit-template-advanced-test/.github/workflows/ci-dispatcher.yml@main
+    with:
+      # Prefer workflow_call inputs; fall back to workflow_dispatch inputs via github.event.inputs
+      workspace: ${{ inputs.workspace || github.event.inputs.workspace }}
+      group:     ${{ inputs.group     || github.event.inputs.group }}
+      project:   ${{ inputs.project   || github.event.inputs.project }}
+      environment:${{ inputs.environment || github.event.inputs.environment }}
+      instance:  ${{ inputs.instance  || github.event.inputs.instance }}
+      pool:      ${{ inputs.pool      || github.event.inputs.pool }}
+    secrets:
+      GH_Token: ${{ secrets.GH_Token }}
