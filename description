@@ -1,0 +1,84 @@
+# Kellanova DMIT Template Advanced Test — Dispatcher Repo
+
+This repository contains reusable GitHub Actions workflows and deployment shell scripts.
+
+It is the **dispatcher** repo, which executes deployments when triggered by caller repos 
+(e.g., [`java-hello-world`](https://github.com/rakesh26955/java-hello-world)).
+
+---
+
+## 🔑 Purpose
+- Provides a **reusable workflow** (`ci-dispatcher.yml`) that performs package deployment.
+- Contains **scripts**:
+  - `deploy-content-packages.sh` → wrapper that loops through zip packages.
+  - `deploy-package-filter.sh` → main deploy logic (config-driven).
+- Centralizes environment/server configuration in `.github/config/server.properties`.
+
+---
+
+## ⚙️ Workflows
+
+📌 File: `.github/workflows/ci-dispatcher.yml`
+
+### Features
+- Triggered by `workflow_call` from other repos.
+- Validates inputs (workspace, group, project, env, instance, pool).
+- Checks for `.zip` files in workspace.
+- Runs `deploy-content-packages.sh`, which then calls `deploy-package-filter.sh`.
+- Uses `server.properties` for **all config** (no hardcoding).
+- Has `SKIP_DEPLOY=true` by default in GitHub Actions → prevents real deployments on public runners.
+
+---
+
+## 🛠 Scripts
+
+### `deploy-content-packages.sh`
+- Loops through `.zip` files in the workspace.
+- Calls `deploy-package-filter.sh` for each package.
+- Uses the `SERVER_CONFIG` environment variable to locate config.
+- **No hardcoding** → paths come from config.
+
+### `deploy-package-filter.sh`
+- Refactored (~250 lines, was ~800).
+- **Config-driven**: All values (paths, tools, servers) come from `server.properties`.
+- Validates packages (exists, size limit).
+- Creates temporary explode dir (fallbacks if unwritable).
+- Extracts metadata (`filter.xml`, `properties.xml`).
+- Selects servers dynamically (`dev_kstl_aem_authors`, etc. from config).
+- Uploads & installs package on AEM servers via `curl`.
+- Supports `SKIP_DEPLOY=true` to skip curl calls in CI/CD.
+
+---
+
+## 📄 Config
+
+📌 File: `.github/config/server.properties`
+
+Holds all runtime config:
+- Tools (`CURL_BIN`, `UNZIP_BIN`, `JAR_BIN`)
+- Paths (`CRX_UPLOAD_PATH`, `CRX_INSTALL_PREFIX`, `PKG_BASE_PATH`, `EXPLODE_ROOT`)
+- Ports (`DEFAULT_AUTHOR_PORT`, `DEFAULT_PUBLISH_PORT`)
+- Credentials (`aem_build_user`)
+- Servers (e.g., `dev_kstl_aem_authors`, `prd_kfr_aem_publishers`)
+- Optional limits (`max_package_size`)
+
+---
+
+## ✅ Why modified
+- Original scripts had **hardcoded values** (`/var/lib/...`, inline server lists).
+- Long case-switch blocks (800 lines) → replaced with **config lookups**.
+- Fixed **sed parsing bug** when reading config.
+- Added **explode path fallback** for GitHub runners.
+- Added **`SKIP_DEPLOY` flag** to skip deployment on public CI.
+- Shorter, easier to maintain, same functionality.
+
+---
+
+## 🧪 How to run
+1. Caller repo (like `java-hello-world`) triggers dispatcher.
+2. Dispatcher checks out both repos.
+3. `ci-dispatcher.yml` validates inputs and runs scripts.
+4. Scripts deploy packages (or skip if `SKIP_DEPLOY=true`).
+5. Config changes? → only update `.github/config/server.properties`.
+
+---
