@@ -39,10 +39,15 @@ if [ ${#files[@]} -eq 0 ]; then
   die "No .zip files found in workspace: $WORKSPACE"
 fi
 
-# force SERVER_CONFIG to .github/config/server.properties
-export SERVER_CONFIG=".github/config/server.properties"
+# --- config file handling ---
+CONFIG_FILE="${SERVER_CONFIG:-.github/config/server.properties}"
+info "Using config file: $CONFIG_FILE"
 
-# iterate packages and call child deploy script
+if [ ! -f "$CONFIG_FILE" ]; then
+  die "Config file not found: $CONFIG_FILE"
+fi
+
+# --- iterate packages and call child deploy script ---
 for f in "${files[@]}"; do
   pkgname="$(basename "$f" .zip)"
   info "Processing package file: $f (package prefix: $pkgname)"
