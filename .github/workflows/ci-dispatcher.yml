@@ -47,11 +47,14 @@ jobs:
           persist-credentials: false
 
       - name: Ensure scripts are executable if present
-        run: chmod +x temp/.github/scripts/*.sh || true
+        run: |
+          chmod +x temp/.github/scripts/*.sh || true
 
       - name: Validate inputs & normalize
         id: validate
         run: |
+          set -euo pipefail
+
           allowed_envs="dev stage prod"
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
@@ -62,6 +65,12 @@ jobs:
           IN_ENV="${{ inputs.environment }}"
           IN_INSTANCE="${{ inputs.instance }}"
           IN_POOL="${{ inputs.pool }}"
+
+          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
+          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
+          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
+          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
 
           contains() {
             list="$1"; item="$2"
@@ -77,27 +86,24 @@ jobs:
             echo "ERROR: Invalid environment: $IN_ENV" >&2
             exit 1
           fi
+
           if ! contains "$allowed_instances" "$IN_INSTANCE"; then
             echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
             exit 1
           fi
+
           if ! contains "$allowed_pools" "$IN_POOL"; then
             echo "ERROR: Invalid pool: $IN_POOL" >&2
             exit 1
           fi
 
           case "$IN_ENV" in
-            dev) MAPPED_ENV="dev" ;;
-            stage) MAPPED_ENV="stage" ;;
-            prod) MAPPED_ENV="production" ;;
+            dev)  MAPPED_ENV="dev" ;;
+            stage) MAPPED_ENV="stg" ;;
+            prod) MAPPED_ENV="prd" ;;
             *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
           esac
 
-          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
