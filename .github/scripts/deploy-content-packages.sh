@@ -1,46 +1,74 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -euo pipefail
 
 # deploy-content-packages.sh
-# Finds .zip packages in workspace and calls deploy-package-filter.sh.
+# Strict, no hardcoded operational values inside the script.
+# Usage:
+#   bash .github/scripts/deploy-content-packages.sh <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]
+# The deploy-package-filter.sh script must be present in the same directory as this script.
+# The script relies on SERVER_CONFIG env (optional). If SERVER_CONFIG is not set it will use "config/server.properties".
 
-help() {
-  echo "Usage: $0 <WORKSPACE> <GROUP> <PROJECT> <ENVIRONMENT> <INSTANCE> <POOL>"
-  exit 1
-}
+die(){ echo "ERROR: $*" >&2; exit 1; }
+info(){ echo "INFO: $*"; }
 
-if [ $# -ne 6 ]; then
-  help
+# --- config file (no internal magic defaults) ---
+if [ -n "${SERVER_CONFIG:-}" ]; then
+  CONFIG_FILE="${SERVER_CONFIG}"
+else
+  CONFIG_FILE="config/server.properties"
 fi
 
-WORKSPACE=$1
-GROUP=$2
-PROJECT=$3
-ENVIRONMENT=$4
-INSTANCE=$5
-POOL=$6
+# --- args ---
+if [ $# -lt 6 ]; then
+  die "Usage: bash $0 <WorkspacePath> <Group> <Project> <Environment> <Instance> <Pool> [debug]"
+fi
 
-DEPLOY_SCRIPT="$(cd "$(dirname "$0")" && pwd)/deploy-package-filter.sh"
-[ -x "$DEPLOY_SCRIPT" ] || { echo "ERROR: missing $DEPLOY_SCRIPT"; exit 1; }
+WORKSPACE="$1"        # path to workspace (may be relative)
+GROUP="$2"
+PROJECT="$3"
+ENVIRONMENT="$4"      # dev|stage|prod
+INSTANCE="$5"         # author|publish|both
+POOL="$6"
+DEBUG_FLAG="${7:-}"
 
-: "${CONFIG_FILE:=config/server.properties}"
-: "${CURL_BIN:=/usr/bin/curl}"
-: "${UNZIP_BIN:=unzip}"
-: "${JAR_BIN:=jar}"
-: "${DEBUG:=false}"
+# --- script locations (no hardcoded paths outside repo) ---
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEPLOY_SCRIPT="${SCRIPT_DIR}/deploy-package-filter.sh"
+[ -f "$DEPLOY_SCRIPT" ] || die "Missing deploy script: $DEPLOY_SCRIPT"
 
-cd "$WORKSPACE" || { echo "Workspace not found: $WORKSPACE"; exit 1; }
+# ensure workspace exists
+if [ ! -d "$WORKSPACE" ]; then
+  die "Workspace directory not found: $WORKSPACE"
+fi
 
-found=0
-for f in *.zip; do
-  [ -e "$f" ] || continue
-  found=1
-  PACKAGENAME="${f%.zip}"
-  echo "Processing package: $f"
-  CONFIG_FILE="$CONFIG_FILE" CURL_BIN="$CURL_BIN" UNZIP_BIN="$UNZIP_BIN" JAR_BIN="$JAR_BIN" DEBUG="$DEBUG" \
-    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$PACKAGENAME" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
+# enable nullglob so no-match yields empty array
+shopt -s nullglob
+files=( "$WORKSPACE"/*.zip )
+
+if [ ${#files[@]} -eq 0 ]; then
+  die "No .zip files found in workspace: $WORKSPACE"
+fi
+
+# export SERVER_CONFIG for child script if present in environment; otherwise nothing (child script will use default)
+if [ -n "${SERVER_CONFIG:-}" ]; then
+  export SERVER_CONFIG
+fi
+
+# iterate files and call deploy-package-filter.sh for each
+for f in "${files[@]}"; do
+  pkgname="$(basename "$f" .zip)"
+  info "Processing package file: $f (package prefix: $pkgname)"
+
+  # call deploy script with same config handling the deploy script expects
+  # args: <PackagePath> <PackagePrefix> <Group> <Project> <Environment> <Instance> <Pool> [debug]
+  if [ -n "$DEBUG_FLAG" ]; then
+    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL" "$DEBUG_FLAG"
+  else
+    bash "$DEPLOY_SCRIPT" "$WORKSPACE" "$pkgname" "$GROUP" "$PROJECT" "$ENVIRONMENT" "$INSTANCE" "$POOL"
+  fi
+
+  info "Finished processing $pkgname"
 done
 
-[ $found -eq 1 ] || { echo "No .zip packages found in $WORKSPACE"; exit 1; }
-
-echo "All packages processed."
+info "All packages in workspace processed."
+exit 0
