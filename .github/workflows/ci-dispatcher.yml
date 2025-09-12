@@ -1,4 +1,4 @@
-name: ci-dispatcher (reusable)
+name: ci-dispatcher (deploy-enabled)
 
 on:
   workflow_call:
@@ -45,6 +45,11 @@ jobs:
           path: temp
           persist-credentials: false
 
+      - name: Ensure scripts are executable
+        run: |
+          chmod +x temp/.github/scripts/*.sh || true
+          ls -la temp/.github/scripts || true
+
       - name: Validate inputs (simple)
         id: validate
         run: |
@@ -58,7 +63,7 @@ jobs:
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Checking: $WS"
+          echo "Checking for packages in: $WS"
           if compgen -G "${WS}/*.zip" > /dev/null; then
             ls -la "${WS}"/*.zip || true
           else
@@ -66,16 +71,35 @@ jobs:
             exit 1
           fi
 
-      - name: (Optional) Show deploy-wrapper presence
+      - name: Run deploy wrapper (real deploy)
         env:
           SERVER_CONFIG: temp/config/server.properties
         run: |
+          set -euo pipefail
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
-          if [ -f "$DEPLOY_WRAPPER" ]; then
-            chmod +x "$DEPLOY_WRAPPER" || true
-            echo "Deploy wrapper present at $DEPLOY_WRAPPER"
-            # To actually run it uncomment the line below once you're ready and scripts exist:
-            # bash "$DEPLOY_WRAPPER" "app/${{ steps.validate.outputs.workspace }}" "${{ inputs.group }}" "${{ inputs.project }}" "${{ inputs.environment }}" "${{ inputs.instance }}" "${{ inputs.pool }}"
-          else
-            echo "No deploy wrapper at $DEPLOY_WRAPPER; skipping."
+
+          if [ ! -f "$DEPLOY_WRAPPER" ]; then
+            echo "ERROR: Deploy wrapper not found at $DEPLOY_WRAPPER" >&2
+            exit 1
           fi
+
+          # Make sure wrapper is executable
+          chmod +x "$DEPLOY_WRAPPER" || true
+
+          echo "Running deploy wrapper:"
+          echo "  workspace: app/${{ steps.validate.outputs.workspace }}"
+          echo "  group: ${{ inputs.group }} project: ${{ inputs.project }} env: ${{ inputs.environment }} instance: ${{ inputs.instance }} pool: ${{ inputs.pool }}"
+
+          # call wrapper with the workspace path (caller repo checked out into app/)
+          bash "$DEPLOY_WRAPPER" \
+            "app/${{ steps.validate.outputs.workspace }}" \
+            "${{ inputs.group }}" \
+            "${{ inputs.project }}" \
+            "${{ inputs.environment }}" \
+            "${{ inputs.instance }}" \
+            "${{ inputs.pool }}"
+
+      - name: Cleanup (optional)
+        if: always()
+        run: |
+          echo "Deploy step completed (success or failure)."
