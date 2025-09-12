@@ -61,7 +61,7 @@ else
         for n in ${package[@]}; do
                 echo "Sending $packagename to deploy script."
                 packagename=`echo ${n} | awk -F'.zip' '{print $1}'`
-                # /var/lib/build/scripts/deploy/deploy-package-filter.sh $workspace $packagename $group $project $environment $instance $pool
+                bash $GITHUB_WORKSPACE/temp/.github/scripts/deploy-package-filter.sh $workspace $packagename $group $project $environment $instance $pool
         done
 fi
 }
