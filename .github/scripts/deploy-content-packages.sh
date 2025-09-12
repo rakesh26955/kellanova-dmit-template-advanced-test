@@ -42,10 +42,7 @@ fi
 # --- config file handling ---
 CONFIG_FILE="${SERVER_CONFIG:-.github/config/server.properties}"
 info "Using config file: $CONFIG_FILE"
-
-if [ ! -f "$CONFIG_FILE" ]; then
-  die "Config file not found: $CONFIG_FILE"
-fi
+[ -f "$CONFIG_FILE" ] || die "Config file not found: $CONFIG_FILE"
 
 # --- iterate packages and call child deploy script ---
 for f in "${files[@]}"; do
