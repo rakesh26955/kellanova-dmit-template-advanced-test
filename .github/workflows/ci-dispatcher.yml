@@ -4,27 +4,21 @@ on:
   workflow_call:
     inputs:
       workspace:
-        description: "Workspace path (relative to caller repo root)"
         required: true
         type: string
       group:
-        description: "Group name"
         required: true
         type: string
       project:
-        description: "Project name"
         required: true
         type: string
       environment:
-        description: "Environment name (dev, stage, prod)"
         required: true
         type: string
       instance:
-        description: "Instance (author|publish|both)"
         required: true
         type: string
       pool:
-        description: "Pool (kstl|kfr|gen|dam|kstl65|kfr65|newkstl65|kfr63|...)"
         required: true
         type: string
     secrets:
@@ -104,6 +98,7 @@ jobs:
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stage" ;;
             prod) MAPPED_ENV="production" ;;
+            *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
           esac
 
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
@@ -111,7 +106,6 @@ jobs:
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Looking for .zip files in: ${WS}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
             echo ".zip files found."
           else
