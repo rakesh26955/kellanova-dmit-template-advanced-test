@@ -26,7 +26,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   run-scripts:
@@ -66,15 +66,15 @@ jobs:
             exit 1
           fi
 
-      - name: (Optional) Call deploy wrapper if present
+      - name: (Optional) Show deploy-wrapper presence
         env:
           SERVER_CONFIG: temp/config/server.properties
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
           if [ -f "$DEPLOY_WRAPPER" ]; then
             chmod +x "$DEPLOY_WRAPPER" || true
-            echo "Would run deploy wrapper: $DEPLOY_WRAPPER"
-            # to actually run: uncomment next line
+            echo "Deploy wrapper present at $DEPLOY_WRAPPER"
+            # To actually run it uncomment the line below once you're ready and scripts exist:
             # bash "$DEPLOY_WRAPPER" "app/${{ steps.validate.outputs.workspace }}" "${{ inputs.group }}" "${{ inputs.project }}" "${{ inputs.environment }}" "${{ inputs.instance }}" "${{ inputs.pool }}"
           else
             echo "No deploy wrapper at $DEPLOY_WRAPPER; skipping."
