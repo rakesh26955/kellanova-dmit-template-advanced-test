@@ -56,18 +56,48 @@ jobs:
           allowed_instances="author publish both"
           allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
 
-          echo "workspace=${{ inputs.workspace }}" >> "$GITHUB_OUTPUT"
-          echo "group=${{ inputs.group }}" >> "$GITHUB_OUTPUT"
-          echo "project=${{ inputs.project }}" >> "$GITHUB_OUTPUT"
-          echo "instance=${{ inputs.instance }}" >> "$GITHUB_OUTPUT"
-          echo "pool=${{ inputs.pool }}" >> "$GITHUB_OUTPUT"
+          IN_WORKSPACE="${{ inputs.workspace }}"
+          IN_GROUP="${{ inputs.group }}"
+          IN_PROJECT="${{ inputs.project }}"
+          IN_ENV="${{ inputs.environment }}"
+          IN_INSTANCE="${{ inputs.instance }}"
+          IN_POOL="${{ inputs.pool }}"
 
-          case "${{ inputs.environment }}" in
+          contains() {
+            list="$1"; item="$2"
+            for t in $list; do
+              if [ "$t" = "$item" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          if ! contains "$allowed_envs" "$IN_ENV"; then
+            echo "ERROR: Invalid environment: $IN_ENV" >&2
+            exit 1
+          fi
+          if ! contains "$allowed_instances" "$IN_INSTANCE"; then
+            echo "ERROR: Invalid instance: $IN_INSTANCE" >&2
+            exit 1
+          fi
+          if ! contains "$allowed_pools" "$IN_POOL"; then
+            echo "ERROR: Invalid pool: $IN_POOL" >&2
+            exit 1
+          fi
+
+          case "$IN_ENV" in
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stage" ;;
             prod) MAPPED_ENV="production" ;;
-            *) echo "ERROR: invalid environment" >&2; exit 1 ;;
+            *) echo "ERROR: Invalid environment: $IN_ENV" >&2; exit 1 ;;
           esac
+
+          echo "workspace=${IN_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          echo "group=${IN_GROUP}" >> "$GITHUB_OUTPUT"
+          echo "project=${IN_PROJECT}" >> "$GITHUB_OUTPUT"
+          echo "instance=${IN_INSTANCE}" >> "$GITHUB_OUTPUT"
+          echo "pool=${IN_POOL}" >> "$GITHUB_OUTPUT"
           echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
@@ -75,13 +105,13 @@ jobs:
           WS="app/${{ steps.validate.outputs.workspace }}"
           if compgen -G "${WS}/*.zip" > /dev/null; then
             echo ".zip files found in ${WS}"
-            ls -la ${WS}/*.zip
+            ls -la ${WS}/*.zip || true
           else
             echo "No .zip files found in '${WS}'. Aborting." >&2
             exit 1
           fi
 
-      - name: Run deploy wrapper if present
+      - name: Run deploy-content-packages script
         env:
           SERVER_CONFIG: temp/config/server.properties
           DEBUG: "false"
@@ -96,5 +126,10 @@ jobs:
               "${{ steps.validate.outputs.instance }}" \
               "${{ steps.validate.outputs.pool }}"
           else
-            echo "Deploy wrapper not found or not executable at $DEPLOY_WRAPPER — skipping."
+            echo "ERROR: Deploy wrapper not found or not executable at $DEPLOY_WRAPPER" >&2
+            exit 1
           fi
+
+      - name: Optional brief wait
+        if: always()
+        run: sleep 5
