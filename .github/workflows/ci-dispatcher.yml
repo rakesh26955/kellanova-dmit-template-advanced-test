@@ -38,7 +38,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout caller repository (the repo that invoked this workflow)
+      - name: Checkout caller repository
         uses: actions/checkout@v4
         with:
           path: app
@@ -52,97 +52,55 @@ jobs:
           path: temp
           persist-credentials: false
 
-      - name: Debug: list checked out contents
-        run: |
-          echo "=== app (caller repo) ==="
-          ls -la app || true
-          echo "=== temp (kellanova) ==="
-          ls -la temp || true
-          echo "=== temp/.github ==="
-          ls -la temp/.github || true
-
       - name: Ensure scripts are executable
         run: chmod +x temp/.github/scripts/*.sh || true
 
       - name: Validate inputs & normalize
         id: validate
+        env:
+          WORKSPACE: ${{ inputs.workspace }}
+          GROUP: ${{ inputs.group }}
+          PROJECT: ${{ inputs.project }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          INSTANCE: ${{ inputs.instance }}
+          POOL: ${{ inputs.pool }}
         run: |
           set -euo pipefail
 
-          allowed_envs="dev stage prod"
-          allowed_instances="author publish both"
-          allowed_pools="kstl kfr gen dam kstl65 kfr65 newkstl65 kfr63"
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "group=$GROUP" >> "$GITHUB_OUTPUT"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "instance=$INSTANCE" >> "$GITHUB_OUTPUT"
+          echo "pool=$POOL" >> "$GITHUB_OUTPUT"
 
-          WORKSPACE="${{ inputs.workspace }}"
-          GROUP="${{ inputs.group }}"
-          PROJECT="${{ inputs.project }}"
-          ENV="${{ inputs.environment }}"
-          INSTANCE="${{ inputs.instance }}"
-          POOL="${{ inputs.pool }}"
-
-          echo "workspace=${WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "group=${GROUP}" >> "$GITHUB_OUTPUT"
-          echo "project=${PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
-          echo "instance=${INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "pool=${POOL}" >> "$GITHUB_OUTPUT"
-
-          contains() {
-            list="$1"; item="$2"
-            for t in $list; do
-              if [ "$t" = "$item" ]; then
-                return 0
-              fi
-            done
-            return 1
-          }
-
-          if ! contains "$allowed_envs" "$ENV"; then
-            echo "ERROR: Invalid environment: $ENV" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_instances" "$INSTANCE"; then
-            echo "ERROR: Invalid instance: $INSTANCE" >&2
-            exit 1
-          fi
-
-          if ! contains "$allowed_pools" "$POOL"; then
-            echo "ERROR: Invalid pool: $POOL" >&2
-            exit 1
-          fi
-
-          case "$ENV" in
+          case "$ENVIRONMENT" in
             dev) MAPPED_ENV="dev" ;;
             stage) MAPPED_ENV="stg" ;;
             prod) MAPPED_ENV="prd" ;;
-            *) echo "ERROR: Invalid environment: $ENV" >&2; exit 1 ;;
+            *) echo "ERROR: Invalid environment: $ENVIRONMENT" >&2; exit 1 ;;
           esac
 
-          echo "mapped_environment=${MAPPED_ENV}" >> "$GITHUB_OUTPUT"
+          echo "mapped_environment=$MAPPED_ENV" >> "$GITHUB_OUTPUT"
 
       - name: Check for .zip files in workspace
         run: |
           WS="app/${{ steps.validate.outputs.workspace }}"
-          echo "Checking for .zip packages in: ${WS}"
+          echo "Checking for .zip packages in: $WS"
           if compgen -G "${WS}/*.zip" > /dev/null; then
-            echo ".zip files found:"
             ls -la ${WS}/*.zip || true
           else
-            echo "No .zip files found in '${WS}'. Aborting." >&2
+            echo "No .zip files found in $WS" >&2
             exit 1
           fi
 
-      - name: Run deploy wrapper (real deploy)
+      - name: Run deploy wrapper
         env:
           SERVER_CONFIG: temp/.github/config/server.properties
           DEBUG: "false"
         run: |
           DEPLOY_WRAPPER="temp/.github/scripts/deploy-content-packages.sh"
           if [ -x "$DEPLOY_WRAPPER" ]; then
-            echo "Running deploy wrapper:"
-            echo "  workspace: app/${{ steps.validate.outputs.workspace }}"
-            echo "  group: ${{ steps.validate.outputs.group }} project: ${{ steps.validate.outputs.project }} env: ${{ steps.validate.outputs.mapped_environment }} instance: ${{ steps.validate.outputs.instance }} pool: ${{ steps.validate.outputs.pool }}"
             bash "$DEPLOY_WRAPPER" \
               "app/${{ steps.validate.outputs.workspace }}" \
               "${{ steps.validate.outputs.group }}" \
@@ -151,10 +109,6 @@ jobs:
               "${{ steps.validate.outputs.instance }}" \
               "${{ steps.validate.outputs.pool }}"
           else
-            echo "ERROR: Deploy wrapper not found or not executable at $DEPLOY_WRAPPER" >&2
+            echo "ERROR: Deploy wrapper not found at $DEPLOY_WRAPPER" >&2
             exit 1
           fi
-
-      - name: Cleanup (always)
-        if: always()
-        run: echo "Cleanup complete."
