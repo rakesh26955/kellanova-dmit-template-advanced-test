@@ -38,7 +38,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   key="${line%%=*}"
   val="${line#*=}"
   key="$(printf "%s" "$key" | tr -d '[:space:]')"
-  # trim whitespace and strip optional quotes (single or double)
+  # trim whitespace and strip optional quotes
   val="$(printf "%s" "$val" \
     | sed -e 's/^[[:space:]]*//' \
           -e 's/[[:space:]]*$//' \
@@ -85,7 +85,16 @@ fi
 # --- explode path ---
 RUN_ID="$(date +%s)-$$"
 EXPLODE_PATH="${EXPLODE_ROOT%/}/explode-${RUN_ID}"
-mkdir -p "$EXPLODE_PATH"
+
+# Try to create explode dir; fallback if not writable
+if ! mkdir -p "$EXPLODE_PATH" 2>/dev/null; then
+  warn "EXPLODE_ROOT $EXPLODE_ROOT not writable, falling back to ${GITHUB_WORKSPACE:-$(pwd)}/build"
+  EXPLODE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}/build"
+  EXPLODE_PATH="${EXPLODE_ROOT%/}/explode-${RUN_ID}"
+  mkdir -p "$EXPLODE_PATH"
+fi
+
+info "Using explode path: $EXPLODE_PATH"
 
 # --- extract metadata ---
 if echo "$JARFILE" | grep -q "\.zip$"; then
